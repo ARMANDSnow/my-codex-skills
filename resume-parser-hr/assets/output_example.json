@@ -1,0 +1,107 @@
+{
+  "basic_info": {
+    "name": "李四",
+    "age": 26,
+    "phone": "13800138000",
+    "email": null,
+    "birth_date": null
+  },
+  "education": [
+    {
+      "school": "XX职业技术学院",
+      "degree": "大专",
+      "major": "市场营销",
+      "start_date": null,
+      "end_date": null
+    }
+  ],
+  "experiences": [
+    {
+      "type": "正式工作",
+      "company": "A金融公司",
+      "job_title": "电话销售",
+      "standardized_job_title": "电话销售",
+      "start_date": "2022-01-01",
+      "end_date": "2023-08-01",
+      "duration_months": 19,
+      "description": "负责金融产品外呼，日均拨打120通，月均转化15单，服务C端客户。",
+      "credibility_score": 1.0,
+      "credibility_level": "高可信",
+      "overlap_tag": "主经历"
+    },
+    {
+      "type": "正式工作",
+      "company": "B教育公司",
+      "job_title": "销售顾问",
+      "standardized_job_title": "销售",
+      "start_date": "2023-09-01",
+      "end_date": "2026-04-01",
+      "duration_months": 31,
+      "description": "维护客户并跟进成交，月销售额20万，回款达成率110%。",
+      "credibility_score": 1.0,
+      "credibility_level": "高可信",
+      "overlap_tag": "主经历"
+    }
+  ],
+  "tenure_summary": {
+    "full_time_months": 50,
+    "internship_months": 0,
+    "project_months": 0,
+    "freelance_months": 0,
+    "pending_months": 0,
+    "full_time_years": 4.17
+  },
+  "stability_scores": {
+    "stability_score": 81.2,
+    "gap_score": 77.8,
+    "stability_label": "优秀",
+    "gap_label": "良好",
+    "stability_metrics": {
+      "avg_duration_months": 25.0,
+      "median_duration_months": 25.0,
+      "recent_2_avg_months": 31,
+      "short_tenure_ratio_12": 0.0,
+      "severe_short_ratio_6": 0.0,
+      "short_tenure_count": 0
+    },
+    "gap_metrics": {
+      "total_gap_months": 1,
+      "recent_5y_gap_months": 1,
+      "longest_gap_months": 1,
+      "gap_count": 1,
+      "gap_explanation_score": 0.35
+    }
+  },
+  "anomalies": [],
+  "recommendation": {
+    "result": "强推荐",
+    "reason": "满足强判据；优势：有客户沟通经验、简历表达和字段完整度较好、稳定性尚可、有销售或业务结果指标",
+    "confidence": 0.93,
+    "score": 0.8,
+    "target_job_title": "电话销售",
+    "details": {
+      "strong_criteria_met": true,
+      "unmet_strong_criteria": [],
+      "weak_criteria": [
+        "有客户沟通经验",
+        "简历表达和字段完整度较好",
+        "稳定性尚可",
+        "有销售或业务结果指标",
+        "过往行业或职能可迁移"
+      ],
+      "downgrade_factors": [],
+      "evidence": {
+        "credible_relevant_months": 50,
+        "high_credible_relevant_count": 2
+      },
+      "p0_count": 0,
+      "p1_count": 0,
+      "p2_count": 0
+    }
+  },
+  "parsing_confidence": 1.0,
+  "field_completeness": 100.0,
+  "low_credibility_ratio": 0.0,
+  "generation_time": "2026-04-22T12:00:00",
+  "version": "2.0"
+}
