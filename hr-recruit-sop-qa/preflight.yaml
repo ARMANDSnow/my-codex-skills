@@ -1,0 +1,31 @@
+skill: hr-recruit-sop-qa
+version: 0.2.0
+
+required:
+  - path: knowledge/
+    desc: HR 内部已批准的招聘制度 / SOP / 流程说明 / 背调说明 / 入职说明等本地知识库文件
+    type: dir
+    min_files: 1
+    formats: [docx, pdf, xlsx, md, txt]
+
+runtime_required:
+  - desc: 用户问题（招聘流程 / 面试 / Offer / 背调 / 入职 / 转正 / 异常处理 / FAQ）
+    type: text
+
+recommended:
+  - path: knowledge/faq.xlsx
+    desc: HR 高频问答，建议包含 question、answer、source 三列
+    formats: [xlsx]
+    fallback: 高频问题命中率下降，回退到全文检索
+  - path: rules/search-policy.yaml
+    desc: 本地检索范围、支持格式、冲突处理、无命中回复等策略
+    formats: [yaml]
+    fallback: 使用默认检索策略：检索 knowledge/ 下支持格式文件，冲突时优先文档内最新生效日期 / 版本号
+
+optional: []
+
+blocker_message_template: |
+  本 Skill 暂不能运行，缺少以下必需资源：
+  {missing_items}
+
+  请在 knowledge/ 中补充至少 1 份已批准的 HR 本地规范文件后重试，或联系 文淦 Daniel（人力资源部 — OC）协助。
