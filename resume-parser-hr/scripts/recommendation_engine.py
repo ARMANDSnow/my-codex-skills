@@ -90,6 +90,13 @@ def _sorted_experiences(candidate: Dict) -> List[Dict]:
     return sorted(candidate.get("experiences", []), key=lambda exp: parse_date(exp.get("start_date")) or parse_date("1900.01"))
 
 
+def _score_impact_anomalies(candidate: Dict) -> List[Dict]:
+    return [
+        item for item in candidate.get("anomalies", [])
+        if "不参与评分" not in (item.get("action") or "")
+    ]
+
+
 def related_experiences(candidate: Dict, job_title: str, threshold: float = 0.5) -> List[Dict]:
     result = []
     for exp in candidate.get("experiences", []):
@@ -133,8 +140,9 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
     elif not last_exp:
         unmet.append("缺少经历信息")
 
-    p0 = [item for item in candidate.get("anomalies", []) if item.get("level") == "P0"]
-    p1 = [item for item in candidate.get("anomalies", []) if item.get("level") == "P1"]
+    scoring_anomalies = _score_impact_anomalies(candidate)
+    p0 = [item for item in scoring_anomalies if item.get("level") == "P0"]
+    p1 = [item for item in scoring_anomalies if item.get("level") == "P1"]
     if p0:
         unmet.append(f"存在{len(p0)}个P0异常")
     if len(p1) > 1:
@@ -181,9 +189,10 @@ def check_downgrade_factors(candidate: Dict, jd: Dict, job_title: str) -> List[s
         factors.append("仅有一段低可信相关经历")
     if relevant and not any(exp in relevant for exp in _sorted_experiences(candidate)[-2:]):
         factors.append("相关经历较久以前，最近岗位不相关")
-    if any("时间" in item.get("type", "") or "重叠" in item.get("type", "") for item in candidate.get("anomalies", [])):
+    scoring_anomalies = _score_impact_anomalies(candidate)
+    if any("时间" in item.get("type", "") or "重叠" in item.get("type", "") for item in scoring_anomalies):
         factors.append("时间线异常")
-    if any("跳槽" in item.get("type", "") for item in candidate.get("anomalies", [])):
+    if any("跳槽" in item.get("type", "") for item in scoring_anomalies):
         factors.append("近期跳槽频率偏高")
     stability = candidate.get("stability_scores", {})
     if is_sales_position(job_title, jd):
@@ -198,8 +207,9 @@ def calculate_recommendation_score(strong_met: bool, weak: List[str], downgrade:
     score = 0.5 if strong_met else 0.0
     score += min(len(weak) * 0.1, 0.3)
     score -= min(len(downgrade) * 0.1, 0.3)
-    score -= len([item for item in anomalies if item.get("level") == "P1"]) * 0.15
-    score -= len([item for item in anomalies if item.get("level") == "P2"]) * 0.05
+    scoring_anomalies = [item for item in anomalies if "不参与评分" not in (item.get("action") or "")]
+    score -= len([item for item in scoring_anomalies if item.get("level") == "P1"]) * 0.15
+    score -= len([item for item in scoring_anomalies if item.get("level") == "P2"]) * 0.05
     return round(max(0.0, min(1.0, score)), 2)
 
 
@@ -212,8 +222,9 @@ def recommend(candidate: Dict, jd_text: Optional[str] = None, job_title: Optiona
     weak = check_weak_criteria(candidate, jd, target)
     downgrade = check_downgrade_factors(candidate, jd, target)
     anomalies = candidate.get("anomalies", [])
+    scoring_anomalies = _score_impact_anomalies(candidate)
     score = calculate_recommendation_score(strong_met, weak, downgrade, anomalies)
-    p0 = [item for item in anomalies if item.get("level") == "P0"]
+    p0 = [item for item in scoring_anomalies if item.get("level") == "P0"]
 
     if strong_met and score >= 0.7 and not p0:
         result = "强推荐"
@@ -249,8 +260,9 @@ def recommend(candidate: Dict, jd_text: Optional[str] = None, job_title: Optiona
             "downgrade_factors": downgrade,
             "evidence": evidence,
             "p0_count": len(p0),
-            "p1_count": len([item for item in anomalies if item.get("level") == "P1"]),
-            "p2_count": len([item for item in anomalies if item.get("level") == "P2"]),
+            "p1_count": len([item for item in scoring_anomalies if item.get("level") == "P1"]),
+            "p2_count": len([item for item in scoring_anomalies if item.get("level") == "P2"]),
+            "compliance_review_count": len(anomalies) - len(scoring_anomalies),
         },
     }
 

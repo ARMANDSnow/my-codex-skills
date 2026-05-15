@@ -60,13 +60,13 @@ def validate_age_tenure(age: Optional[int], full_time_months: int) -> List[Dict]
     years = full_time_months / 12
     items = []
     if age <= 23 and years > 4:
-        items.append(anomaly("年龄-工龄异常", "P0", f"年龄{age}岁，正式工龄{years:.1f}年，疑似偏高", "强制复核"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验教育和工作时间线", "人工复核提示（不参与评分）"))
     if age <= 25 and years > 6:
-        items.append(anomaly("年龄-工龄高异常", "P0", f"年龄{age}岁，正式工龄{years:.1f}年，明显偏高", "强制复核"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，明显偏高，需人工核验", "人工复核提示（不参与评分）"))
     if age <= 28 and years > 8:
-        items.append(anomaly("年龄-工龄异常", "P1", f"年龄{age}岁，正式工龄{years:.1f}年，需核验起始工作时间", "降权并复核"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验起始工作时间", "人工复核提示（不参与评分）"))
     if age <= 35 and years > 15:
-        items.append(anomaly("年龄-工龄提示", "P2", f"年龄{age}岁，正式工龄{years:.1f}年，请核验教育和工作时间线", "增加追问"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，请核验教育和工作时间线", "人工复核提示（不参与评分）"))
     return items
 
 
@@ -80,7 +80,7 @@ def validate_work_start_age(experiences: List[Dict], age: Optional[int]) -> List
             continue
         start = parse_date(exp.get("start_date"))
         if start and start.year - birth_year < 16:
-            items.append(anomaly("工龄开始时间异常", "P0", f"{exp.get('company', '未知公司')}开始工作时约{start.year - birth_year}岁，早于16岁", "强制复核"))
+            items.append(anomaly("工龄开始时间提示", "P2", f"按候选人自述年龄推算，{exp.get('company', '未知公司')}开始工作时约{start.year - birth_year}岁，需核验", "人工复核提示（不参与评分）"))
     return items
 
 
