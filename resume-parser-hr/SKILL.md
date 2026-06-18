@@ -53,14 +53,17 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 
 候选人卡片至少包含：
 
-- `basic_info`：姓名、年龄、手机、邮箱、出生日期。
+- `basic_info`：姓名、年龄、手机、邮箱、出生日期、`languages`（语言能力，未提及写“未说明”）。
 - `education`：学校、学历、专业、起止时间。
 - `experiences`：经历类型、公司、原岗位、标准岗位、起止日期、月数、可信度分、重叠标记、描述。
 - `tenure_summary`：`full_time_months`、`internship_months`、`project_months`、`freelance_months`、`pending_months`、`full_time_years`。
-- `stability_scores`：履历稳定分、Gap 分、稳定性标签、Gap 标签、平均/中位在岗月数、短任职占比、最长 Gap、近 5 年 Gap。
+- `stability_scores`：履历稳定分、Gap 分、稳定性标签、Gap 标签、`gap_summary`（空窗总体说明）、`gap_details`（逐段空窗明细）、平均/中位在岗月数、短任职占比、最长 Gap、近 5 年 Gap。
+- `resume_recency`：简历时效——`latest_year_in_text`、`years_since_latest`、`has_ongoing`、`is_stale`。
 - `anomalies`：P0/P1/P2 异常、描述和动作。
 - `recommendation`：推荐等级、理由、置信度、目标岗位、强/弱/降权细节。
 - `parsing_confidence`：解析置信度。
+
+单份卡片末尾固定输出一张**总结表**（见 `assets/candidate_card_template.md`），至少含推荐等级、综合评分、正式工龄、稳定分、Gap 分及说明、简历时效、**语言**、解析置信度；缺失项写“未说明”，不要留空。
 
 批量筛选表至少包含：候选人、推荐等级、匹配分、解析置信度、学历、相关经验月数、技能/关键词命中、不匹配项、人工复核原因、50 字以内评语。
 
@@ -71,8 +74,10 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 1. **岗位标准化**：用 `scripts/standardize_job_title.py` 合并同义岗位。销售相关岗位要区分电话销售、面销、大客户销售、渠道销售、商务拓展、客服等；岗位相近度用于推荐匹配。
 2. **经历类型先分类再计算**：每段经历必须是正式工作、实习、校园项目、自由职业/创业或待确认。只把正式工作累计为主工龄，实习和项目单独统计。
 3. **时间按月计算**：缺失日期不能默认为至今；时间倒置要进异常。多段重叠经历不得简单累加，主经历按最长正式经历优先，其他标记为 `重叠经历`。
-4. **稳定性和 Gap**：销售岗必须输出履历稳定分和 Gap 分。短任职、最近两段在岗时长、近 5 年 Gap、最长 Gap 和 Gap 解释会影响推荐。
-5. **解析置信度**：由关键字段完整度和低可信经历比例计算。
+4. **稳定性和 Gap**：销售岗必须输出履历稳定分和 Gap 分。短任职、最近两段在岗时长、近 5 年 Gap、最长 Gap 和 Gap 解释会影响推荐。Gap **不能只给分数**，必须配 `gap_summary` 与逐段 `gap_details`（前后公司、起止年月、空窗月数、是否有说明）具体说明。
+5. **语言能力**：提取候选人语言及证书/等级（如英语 CET-6、日语 N2），写入 `basic_info.languages`；未提及写“未说明”。
+6. **简历时效**：取简历文本最新年份，距今 ≥ 约 2 年（在职简历放宽到 ≥ 3 年）时提醒“简历信息可能未更新”（P2），写入 `resume_recency`。
+7. **解析置信度**：由关键字段完整度和低可信经历比例计算。
 
 ### B. 推荐分层
 
@@ -97,7 +102,7 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 
 - **P0 拦截类**：同期多段全职、同期 3 段经历、时间倒置、近期极频繁跳槽。
 - **P1 降权类**：低可信经历、全职和实习重叠、岗位跳跃、学历层级缺失、近期跳槽偏高。
-- **P2 提示类**：时间缺失、项目重叠、学校缺失、跨职能变化、轻度频繁变动、候选人自述年龄与履历时间线明显不一致。
+- **P2 提示类**：时间缺失、项目重叠、学校缺失、跨职能变化、轻度频繁变动、简历信息可能未更新（最新信息距今约 2 年以上）、候选人自述年龄与履历时间线明显不一致。
 
 ### D. 业务红线
 

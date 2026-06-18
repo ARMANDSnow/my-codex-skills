@@ -207,11 +207,60 @@ def validate_education_completeness(education: List[Dict]) -> List[Dict]:
     return items
 
 
+def _gap_reason_match(text: str) -> Optional[str]:
+    """Return the matched gap-reason keyword (备考/考研/创业/项目…), or None."""
+    match = GAP_REASON_RE.search(text or "")
+    return match.group(0) if match else None
+
+
+def validate_resume_freshness(candidate: Dict) -> List[Dict]:
+    """Remind when the resume's newest information is ~2 years old or older.
+
+    Reads ``candidate['resume_recency']`` produced by parse_resume.detect_resume_recency.
+    Pure reminder (P2); never blocks or downgrades. Returns [] when recency is unknown
+    or the resume is up to date.
+    """
+    recency = candidate.get("resume_recency") or {}
+    if not recency.get("is_stale"):
+        return []
+    latest_year = recency.get("latest_year_in_text")
+    years = recency.get("years_since_latest")
+    threshold = recency.get("stale_threshold_years", 2)
+    if recency.get("has_ongoing"):
+        description = (
+            f"简历标注“至今/在职”，但出现的最新年份为 {latest_year} 年，距今约 {years} 年，"
+            f"未见更近的明确时间信息，可能简历未更新或该经历已结束"
+        )
+        action = "向候选人确认是否仍在职及最新经历"
+    else:
+        description = (
+            f"简历最新信息截止 {latest_year} 年，距今约 {years} 年（达到约 {threshold} 年临界值），"
+            f"可能未更新或遗漏近期经历"
+        )
+        action = "向候选人确认最新经历后再评估"
+    return [anomaly("简历信息可能未更新", "P2", description, action)]
+
+
 def _gap_explanation_score(experiences: List[Dict]) -> float:
     text = "\n".join((exp.get("description", "") or "") + " " + (exp.get("gap_reason", "") or "") for exp in experiences)
-    if GAP_REASON_RE.search(text):
-        return 0.85
-    return 0.35
+    return 0.85 if _gap_reason_match(text) else 0.35
+
+
+def _format_gap_note(detail: Dict) -> str:
+    """Human-readable one-line explanation for a single employment gap."""
+    if detail.get("from_date") and detail.get("to_date"):
+        span = f"{detail['from_date']} → {detail['to_date']}"
+    else:
+        span = "时间不详"
+    scope = "近 5 年内" if detail.get("within_5y") else "5 年前"
+    if detail.get("explained"):
+        reason = f"有说明（{detail.get('reason')}）"
+    else:
+        reason = "无说明，建议追问"
+    return (
+        f"{span}（{detail['from_company']} → {detail['to_company']}）："
+        f"空窗 {detail['gap_months']} 个月，{scope}，{reason}"
+    )
 
 
 def calculate_stability_scores(experiences: List[Dict]) -> Dict:
@@ -226,7 +275,9 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             "gap_score": 0.0,
             "stability_label": "无正式工作",
             "gap_label": "无正式工作",
+            "gap_summary": "无正式工作经历，暂无空窗分析。",
             "stability_metrics": {},
+            "gap_details": [],
             "gap_metrics": {},
         }
 
@@ -255,18 +306,51 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
     five_years_ago = datetime(now.year - 5, now.month, 1)
     gaps = []
     recent_gaps = []
+    gap_details = []
     for idx in range(len(full_time) - 1):
-        end = parse_date(full_time[idx].get("end_date"))
-        start = parse_date(full_time[idx + 1].get("start_date"))
+        prev_exp = full_time[idx]
+        next_exp = full_time[idx + 1]
+        end = parse_date(prev_exp.get("end_date"))
+        start = parse_date(next_exp.get("start_date"))
         gap = months_between(end, start)
         if gap >= 1:
             gaps.append(gap)
-            if start and start >= five_years_ago:
+            within_5y = bool(start and start >= five_years_ago)
+            if within_5y:
                 recent_gaps.append(gap)
+            reason_text = " ".join([
+                prev_exp.get("description", "") or "",
+                prev_exp.get("gap_reason", "") or "",
+                next_exp.get("description", "") or "",
+                next_exp.get("gap_reason", "") or "",
+            ])
+            reason = _gap_reason_match(reason_text)
+            detail = {
+                "from_company": prev_exp.get("company") or "未知公司",
+                "to_company": next_exp.get("company") or "未知公司",
+                "from_date": end.strftime("%Y-%m") if end else None,
+                "to_date": start.strftime("%Y-%m") if start else None,
+                "gap_months": gap,
+                "within_5y": within_5y,
+                "explained": bool(reason),
+                "reason": reason,
+            }
+            detail["note"] = _format_gap_note(detail)
+            gap_details.append(detail)
 
     total_recent_gap = sum(recent_gaps)
     longest_gap = max(gaps) if gaps else 0
     explanation = _gap_explanation_score(experiences) if gaps else 1.0
+
+    if gap_details:
+        explained_count = sum(1 for d in gap_details if d["explained"])
+        gap_summary = (
+            f"共 {len(gap_details)} 段空窗，累计 {sum(gaps)} 个月，最长 {longest_gap} 个月，"
+            f"近 5 年 {total_recent_gap} 个月；其中 {explained_count} 段有说明、"
+            f"{len(gap_details) - explained_count} 段无说明。"
+        )
+    else:
+        gap_summary = "正式工作之间无明显空窗（≥1 个月）。"
     gap_score = 100 * (
         0.50 * (1 - min(total_recent_gap, 12) / 12)
         + 0.30 * (1 - min(longest_gap, 6) / 6)
@@ -283,6 +367,7 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         "gap_score": round(gap_score, 1),
         "stability_label": label(stability_score, "stability"),
         "gap_label": label(gap_score, "gap"),
+        "gap_summary": gap_summary,
         "stability_metrics": {
             "avg_duration_months": round(avg_duration, 1),
             "median_duration_months": round(median_duration, 1),
@@ -291,6 +376,7 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             "severe_short_ratio_6": round(severe_short_ratio, 3),
             "short_tenure_count": sum(1 for d in durations if d < 12),
         },
+        "gap_details": gap_details,
         "gap_metrics": {
             "total_gap_months": sum(gaps),
             "recent_5y_gap_months": total_recent_gap,
@@ -317,6 +403,7 @@ def run_all_validations(candidate: Dict) -> List[Dict]:
     items.extend(validate_job_hopping_pattern(experiences))
     items.extend(validate_education_completeness(candidate.get("education", [])))
     items.extend(validate_experience_credibility(experiences))
+    items.extend(validate_resume_freshness(candidate))
 
     candidate["stability_scores"] = calculate_stability_scores(experiences)
     level_order = {"P0": 0, "P1": 1, "P2": 2}

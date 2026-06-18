@@ -29,6 +29,65 @@ DATE_RANGE_RE = re.compile(
 PHONE_RE = re.compile(r"(?:(?:手机|电话|联系方式)[:：]?\s*)?((?:\+?86[-\s]?)?1[3-9]\d[-\s]?\d{4}[-\s]?\d{4})")
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 
+# 语言能力：基础语种 + 各语种常见证书/等级。命中语种名或其证书即记入该语种。
+_LANGUAGE_BASE = [
+    ("英语", r"英语|英文|english"),
+    ("日语", r"日语|日文|日本语"),
+    ("韩语", r"韩语|韩文|韩国语"),
+    ("法语", r"法语|法文"),
+    ("德语", r"德语|德文"),
+    ("西班牙语", r"西班牙语|西语"),
+    ("俄语", r"俄语|俄文"),
+    ("粤语", r"粤语|广东话"),
+    ("普通话", r"普通话|国语"),
+]
+_LANGUAGE_CERTS = {
+    "英语": [r"CET-?6", r"CET-?4", r"六级", r"四级", r"雅思\s*[\d.]*", r"IELTS\s*[\d.]*",
+             r"托福\s*\d*", r"TOEFL\s*\d*", r"专八", r"TEM-?8", r"专四", r"TEM-?4", r"BEC"],
+    "日语": [r"JLPT", r"N[1-5]\b"],
+    "韩语": [r"TOPIK\s*\d*"],
+}
+# 仅匹配独立的四位年份（避免命中手机号/工号里的数字片段）。
+YEAR_TOKEN_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+PRESENT_TOKEN_RE = re.compile(r"至今|现在|目前|present|now|在职", re.I)
+
+
+def extract_languages(text: str) -> str:
+    """提取候选人语言能力，带常见证书；未提及时返回“未说明”。"""
+    labels = []
+    for name, pattern in _LANGUAGE_BASE:
+        certs = []
+        for cert_pattern in _LANGUAGE_CERTS.get(name, []):
+            match = re.search(cert_pattern, text, re.I)
+            if match:
+                token = match.group(0).strip()
+                if token and token not in certs:
+                    certs.append(token)
+        if re.search(pattern, text, re.I) or certs:
+            labels.append(f"{name}（{'、'.join(certs)}）" if certs else name)
+    return "、".join(labels) if labels else "未说明"
+
+
+def detect_resume_recency(text: str, stale_years: int = 2) -> Dict:
+    """判断简历信息新旧：取文本中出现的最新四位年份，距今 ≥ 阈值则视为可能未更新。
+
+    用文本最新年份而非经历结束日期，避免“至今”被解析成当前月份后掩盖陈旧简历。
+    """
+    now = datetime.now()
+    years = [int(y) for y in YEAR_TOKEN_RE.findall(text) if 1990 <= int(y) <= now.year]
+    latest_year = max(years) if years else None
+    years_since = (now.year - latest_year) if latest_year is not None else None
+    has_ongoing = bool(PRESENT_TOKEN_RE.search(text))
+    # 标注“至今/在职”的简历默认更可能是近况，临界值放宽 1 年，避免误伤长期在职者。
+    effective_threshold = stale_years + 1 if has_ongoing else stale_years
+    return {
+        "latest_year_in_text": latest_year,
+        "years_since_latest": years_since,
+        "has_ongoing": has_ongoing,
+        "is_stale": bool(latest_year is not None and years_since >= effective_threshold),
+        "stale_threshold_years": stale_years,
+    }
+
 
 def extract_text(path: str) -> str:
     file_path = Path(path)
@@ -60,7 +119,7 @@ def normalize_text(text: str) -> str:
 
 
 def extract_basic_info(text: str) -> Dict:
-    info = {"name": None, "age": None, "phone": None, "email": None, "birth_date": None}
+    info = {"name": None, "age": None, "phone": None, "email": None, "birth_date": None, "languages": "未说明"}
     name_match = re.search(r"(?:姓名|名字)[:：]\s*([\u4e00-\u9fa5A-Za-z]{2,20})", text)
     if name_match:
         info["name"] = name_match.group(1)
@@ -89,6 +148,7 @@ def extract_basic_info(text: str) -> Dict:
         inline_age = re.search(r"(\d{2})\s*岁", text)
         if inline_age:
             info["age"] = int(inline_age.group(1))
+    info["languages"] = extract_languages(text)
     return info
 
 
@@ -207,10 +267,11 @@ def parse_resume_text(text: str, jd_text: Optional[str] = None, job_title: Optio
         "experiences": extract_experiences(text),
         "source_text_length": len(text),
         "generation_time": datetime.now().isoformat(timespec="seconds"),
-        "version": "2.0",
+        "version": "2.1",
     }
     candidate["tenure_summary"] = calculate_tenure(candidate["experiences"])
     candidate["parsing_confidence"] = calculate_parsing_confidence(candidate)
+    candidate["resume_recency"] = detect_resume_recency(text)
     run_all_validations(candidate)
     if jd_text or job_title:
         candidate["recommendation"] = recommend(candidate, jd_text, job_title)

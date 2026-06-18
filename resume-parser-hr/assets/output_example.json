@@ -4,7 +4,8 @@
     "age": 26,
     "phone": "13800138000",
     "email": null,
-    "birth_date": null
+    "birth_date": null,
+    "languages": "英语（CET-6）、普通话"
   },
   "education": [
     {
@@ -56,6 +57,20 @@
     "gap_score": 77.8,
     "stability_label": "优秀",
     "gap_label": "良好",
+    "gap_summary": "共 1 段空窗，累计 1 个月，最长 1 个月，近 5 年 1 个月；其中 0 段有说明、1 段无说明。",
+    "gap_details": [
+      {
+        "from_company": "A金融公司",
+        "to_company": "B教育公司",
+        "from_date": "2023-08",
+        "to_date": "2023-09",
+        "gap_months": 1,
+        "within_5y": true,
+        "explained": false,
+        "reason": null,
+        "note": "2023-08 → 2023-09（A金融公司 → B教育公司）：空窗 1 个月，近 5 年内，无说明，建议追问"
+      }
+    ],
     "stability_metrics": {
       "avg_duration_months": 25.0,
       "median_duration_months": 25.0,
@@ -102,6 +117,13 @@
   "parsing_confidence": 1.0,
   "field_completeness": 100.0,
   "low_credibility_ratio": 0.0,
+  "resume_recency": {
+    "latest_year_in_text": 2026,
+    "years_since_latest": 0,
+    "has_ongoing": false,
+    "is_stale": false,
+    "stale_threshold_years": 2
+  },
   "generation_time": "2026-04-22T12:00:00",
-  "version": "2.0"
+  "version": "2.1"
 }
