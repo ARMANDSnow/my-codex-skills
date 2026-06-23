@@ -20,6 +20,10 @@ PERFORMANCE_RE = re.compile(r"(\d+(\.\d+)?\s*(%|万|k|K|单|个|人|家|通|元|
 CUSTOMER_RE = re.compile(r"客户|用户|企业|商家|门店|会员|B端|C端|ka|KA|大客户|渠道|代理商")
 GAP_REASON_RE = re.compile(r"备考|考研|考公|学习|培训|进修|创业|自由职业|项目|照顾家庭|生育|病假|休养|搬家|gap", re.I)
 
+# 统一的「提醒但不影响评分」动作前缀。recommendation_engine 与 batch_screen_resumes
+# 都靠子串「不参与评分」把这类项排除出打分、并归入「人工复核」区，务必保留该四字。
+NO_SCORE_ACTION_PREFIX = "人工复核提示（不参与评分）"
+
 
 def anomaly(anomaly_type: str, level: str, description: str, action: str = "人工复核") -> Dict:
     return {"type": anomaly_type, "level": level, "description": description, "action": action}
@@ -60,13 +64,13 @@ def validate_age_tenure(age: Optional[int], full_time_months: int) -> List[Dict]
     years = full_time_months / 12
     items = []
     if age <= 23 and years > 4:
-        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验教育和工作时间线", "人工复核提示（不参与评分）"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验教育和工作时间线", NO_SCORE_ACTION_PREFIX))
     if age <= 25 and years > 6:
-        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，明显偏高，需人工核验", "人工复核提示（不参与评分）"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，明显偏高，需人工核验", NO_SCORE_ACTION_PREFIX))
     if age <= 28 and years > 8:
-        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验起始工作时间", "人工复核提示（不参与评分）"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，需核验起始工作时间", NO_SCORE_ACTION_PREFIX))
     if age <= 35 and years > 15:
-        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，请核验教育和工作时间线", "人工复核提示（不参与评分）"))
+        items.append(anomaly("履历时间线提示", "P2", f"候选人自述年龄{age}岁，正式工龄{years:.1f}年，请核验教育和工作时间线", NO_SCORE_ACTION_PREFIX))
     return items
 
 
@@ -80,7 +84,7 @@ def validate_work_start_age(experiences: List[Dict], age: Optional[int]) -> List
             continue
         start = parse_date(exp.get("start_date"))
         if start and start.year - birth_year < 16:
-            items.append(anomaly("工龄开始时间提示", "P2", f"按候选人自述年龄推算，{exp.get('company', '未知公司')}开始工作时约{start.year - birth_year}岁，需核验", "人工复核提示（不参与评分）"))
+            items.append(anomaly("工龄开始时间提示", "P2", f"按候选人自述年龄推算，{exp.get('company', '未知公司')}开始工作时约{start.year - birth_year}岁，需核验", NO_SCORE_ACTION_PREFIX))
     return items
 
 
@@ -120,7 +124,14 @@ def validate_overlaps(experiences: List[Dict]) -> List[Dict]:
         if full_time_count >= 2:
             items.append(anomaly("时间重叠异常", "P0", f"同期存在{full_time_count}段正式工作：{companies}", "强制复核"))
         elif len(group) >= 3:
-            items.append(anomaly("时间重叠异常", "P0", f"同期存在{len(group)}段经历：{companies}", "强制复核"))
+            # 应届生在校并行多段实习/兼职/项目是常态，不是造假信号：无任何正式工作并行时降为 P2 提示。
+            non_full_time_only = full_time_count == 0 and all(
+                t in {"实习", "校园项目", "自由职业/创业", "待确认"} for t in types
+            )
+            if non_full_time_only:
+                items.append(anomaly("在校并行经历", "P2", f"同期存在{len(group)}段实习/兼职/项目（疑似在校期间）：{companies}", NO_SCORE_ACTION_PREFIX + "：确认是否为在校并行经历"))
+            else:
+                items.append(anomaly("时间重叠异常", "P0", f"同期存在{len(group)}段经历：{companies}", "强制复核"))
         elif "正式工作" in types and "实习" in types:
             items.append(anomaly("全职实习重叠", "P1", f"正式工作与实习时间重叠：{companies}", "降权并复核"))
         elif "校园项目" in types:
@@ -231,13 +242,13 @@ def validate_resume_freshness(candidate: Dict) -> List[Dict]:
             f"简历标注“至今/在职”，但出现的最新年份为 {latest_year} 年，距今约 {years} 年，"
             f"未见更近的明确时间信息，可能简历未更新或该经历已结束"
         )
-        action = "向候选人确认是否仍在职及最新经历"
+        action = NO_SCORE_ACTION_PREFIX + "：向候选人确认是否仍在职及最新经历"
     else:
         description = (
             f"简历最新信息截止 {latest_year} 年，距今约 {years} 年（达到约 {threshold} 年临界值），"
             f"可能未更新或遗漏近期经历"
         )
-        action = "向候选人确认最新经历后再评估"
+        action = NO_SCORE_ACTION_PREFIX + "：向候选人确认最新经历后再评估"
     return [anomaly("简历信息可能未更新", "P2", description, action)]
 
 
@@ -276,6 +287,7 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             "stability_label": "无正式工作",
             "gap_label": "无正式工作",
             "gap_summary": "无正式工作经历，暂无空窗分析。",
+            "gap_score_breakdown": "无正式工作经历，暂无空窗分析。",
             "stability_metrics": {},
             "gap_details": [],
             "gap_metrics": {},
@@ -356,6 +368,16 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         + 0.30 * (1 - min(longest_gap, 6) / 6)
         + 0.20 * explanation
     )
+    # Gap 分三项构成，让 HR 看懂分数怎么来的（口径同 references/validation_rules.md）。
+    recent_part = round(100 * 0.50 * (1 - min(total_recent_gap, 12) / 12), 1)
+    longest_part = round(100 * 0.30 * (1 - min(longest_gap, 6) / 6), 1)
+    explain_part = round(100 * 0.20 * explanation, 1)
+    gap_score_breakdown = (
+        f"Gap 分 {round(gap_score, 1)} = 近5年Gap项 {recent_part}"
+        f"（近5年空窗 {total_recent_gap} 个月，满分50）"
+        f" + 最长Gap项 {longest_part}（最长 {longest_gap} 个月，满分30）"
+        f" + 说明项 {explain_part}（说明系数 {round(explanation, 2)}，满分20）"
+    )
 
     def label(score: float, kind: str) -> str:
         if kind == "gap":
@@ -368,6 +390,7 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         "stability_label": label(stability_score, "stability"),
         "gap_label": label(gap_score, "gap"),
         "gap_summary": gap_summary,
+        "gap_score_breakdown": gap_score_breakdown,
         "stability_metrics": {
             "avg_duration_months": round(avg_duration, 1),
             "median_duration_months": round(median_duration, 1),
@@ -383,6 +406,9 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             "longest_gap_months": longest_gap,
             "gap_count": len(gaps),
             "gap_explanation_score": round(explanation, 2),
+            "gap_score_recent_part": recent_part,
+            "gap_score_longest_part": longest_part,
+            "gap_score_explanation_part": explain_part,
         },
     }
 
