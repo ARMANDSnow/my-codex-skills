@@ -58,6 +58,7 @@
     "stability_label": "优秀",
     "gap_label": "良好",
     "gap_summary": "共 1 段空窗，累计 1 个月，最长 1 个月，近 5 年 1 个月；其中 0 段有说明、1 段无说明。",
+    "gap_score_breakdown": "Gap 分 77.8 = 近5年Gap项 45.8（近5年空窗 1 个月，满分50） + 最长Gap项 25.0（最长 1 个月，满分30） + 说明项 7.0（说明系数 0.35，满分20）",
     "gap_details": [
       {
         "from_company": "A金融公司",
@@ -84,7 +85,10 @@
       "recent_5y_gap_months": 1,
       "longest_gap_months": 1,
       "gap_count": 1,
-      "gap_explanation_score": 0.35
+      "gap_explanation_score": 0.35,
+      "gap_score_recent_part": 45.8,
+      "gap_score_longest_part": 25.0,
+      "gap_score_explanation_part": 7.0
     }
   },
   "anomalies": [],

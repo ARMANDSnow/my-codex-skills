@@ -20,7 +20,7 @@ except ImportError:
 
 
 SUPPORTED_RESUME_SUFFIXES = {".pdf", ".docx", ".txt", ".md"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
 DEFAULT_WEIGHTS = {
     "relevant_experience": 0.35,
     "skill_keyword": 0.25,
@@ -365,7 +365,17 @@ def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str,
     for path in files:
         suffix = path.suffix.lower()
         if suffix in IMAGE_SUFFIXES:
-            rows.append(unparsed_row(path, "图片简历需 OCR/人工处理"))
+            # 先尝试 OCR；依赖未装/失败时优雅降级为人工处理（不中断批量）。
+            try:
+                text = extract_text(str(path))
+                candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title)
+                row = row_from_candidate(path, candidate, jd, effective_job_title, weights)
+                note = "图片经 OCR 解析，建议人工二次确认"
+                existing = row.get("review_reasons", "")
+                row["review_reasons"] = note if existing in ("", "-") else f"{existing}；{note}"
+                rows.append(row)
+            except Exception as exc:  # noqa: BLE001 - OCR 不可用/失败则退回人工。
+                rows.append(unparsed_row(path, f"图片简历需人工处理：{exc}"))
             continue
         if suffix not in SUPPORTED_RESUME_SUFFIXES:
             rows.append(unparsed_row(path, f"暂不支持文件类型：{suffix}"))
