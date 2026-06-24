@@ -247,6 +247,21 @@ def extract_education(text: str) -> List[Dict]:
         edu_start = parse_date(date_match.group("start"))
         edu_end = parse_date(date_match.group("end"))
 
+    # 学历层级推断：很多简历只写“院校+专业+起止年月”，不写“本科/大专”字样。
+    # 此时按院校类型和学制时长推断，避免出现“有院校却学历缺失”的矛盾展示。
+    degree_inferred = False
+    if not degree and schools:
+        school0 = schools[0]
+        span = months_between(edu_start, edu_end) if (edu_start and edu_end) else None
+        if any(k in school0 for k in ["职业技术学院", "职业学院", "高等专科", "专科学校", "技工学校", "职校"]):
+            degree, degree_inferred = "大专", True
+        elif span is not None and span >= 42:
+            degree, degree_inferred = "本科", True
+        elif span is not None and span >= 24:
+            degree, degree_inferred = "大专", True
+        elif "大学" in school0:
+            degree, degree_inferred = "本科", True
+
     if not schools and not degree:
         # 降级：返回占位结构（而非 []），让 validate_education_completeness 出“缺失”提示而非完全静默。
         return [{
@@ -258,6 +273,7 @@ def extract_education(text: str) -> List[Dict]:
     return [{
         "school": schools[0] if schools else None,
         "degree": degree,
+        "degree_inferred": degree_inferred,
         "major": major_match.group(1) if major_match else None,
         "start_date": edu_start.strftime("%Y-%m-%d") if edu_start else None,
         "end_date": edu_end.strftime("%Y-%m-%d") if edu_end else None,
