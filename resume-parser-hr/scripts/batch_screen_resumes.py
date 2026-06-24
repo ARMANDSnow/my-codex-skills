@@ -14,9 +14,11 @@ from typing import Dict, Iterable, List, Optional, Tuple
 try:
     from .parse_resume import extract_text, parse_resume_text
     from .recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences
+    from .calculate_tenure import months_between, parse_date
 except ImportError:
     from parse_resume import extract_text, parse_resume_text
     from recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences
+    from calculate_tenure import months_between, parse_date
 
 
 SUPPORTED_RESUME_SUFFIXES = {".pdf", ".docx", ".txt", ".md"}
@@ -156,11 +158,26 @@ def education_score(candidate: Dict, jd: Dict) -> float:
 
 
 def relevant_experience_months(candidate: Dict, job_title: str) -> int:
-    return sum(
-        exp.get("duration_months", 0) or 0
-        for exp in related_experiences(candidate, job_title)
-        if exp.get("credibility_score", 0) >= 0.4 and exp.get("type") in {"正式工作", "实习"}
-    )
+    # 按时间区间取并集计月数，避免同期多段（如应届生在校多份兼职）被重复累加，
+    # 同时不会因“保留最长主经历”而丢掉更相关但较短的经历信号。
+    intervals = []
+    for exp in related_experiences(candidate, job_title):
+        if exp.get("credibility_score", 0) >= 0.4 and exp.get("type") in {"正式工作", "实习"}:
+            start = parse_date(exp.get("start_date"))
+            end = parse_date(exp.get("end_date"))
+            if start and end and start <= end:
+                intervals.append((start, end))
+    if not intervals:
+        return 0
+    intervals.sort()
+    merged = [intervals[0]]
+    for start, end in intervals[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:  # 与上一段重叠则合并
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return sum(months_between(start, end) for start, end in merged)
 
 
 def keyword_hits(candidate: Dict, jd: Dict) -> List[str]:
