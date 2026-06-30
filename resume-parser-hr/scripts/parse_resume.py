@@ -22,8 +22,10 @@ except ImportError:
     from validate_anomalies import calculate_experience_credibility, run_all_validations
 
 
+# 分隔符兼容全角波浪号 ～(U+FF5E)、全角连字符 －(U+FF0D)、波浪线 〜(U+301C)、长/短破折号；
+# 中文简历用 ～ 作起止分隔极常见，漏掉会导致整段经历解析不出来（→ 误判"无经验"）。
 DATE_RANGE_RE = re.compile(
-    r"(?P<start>(?:19|20)\d{2}[./年-]?\s*\d{0,2}月?)\s*[-~至到—–]+\s*(?P<end>至今|现在|目前|present|now|(?:19|20)\d{2}[./年-]?\s*\d{0,2}月?)",
+    r"(?P<start>(?:19|20)\d{2}[./年-]?\s*\d{0,2}月?)\s*[-~～－〜—–至到]+\s*(?P<end>至今|现在|目前|present|now|(?:19|20)\d{2}[./年-]?\s*\d{0,2}月?)",
     re.I,
 )
 PHONE_RE = re.compile(r"(?:(?:手机|电话|联系方式)[:：]?\s*)?((?:\+?86[-\s]?)?1[3-9]\d[-\s]?\d{4}[-\s]?\d{4})")
@@ -302,12 +304,12 @@ def _guess_company(lines: List[str]) -> Optional[str]:
 
 
 def _guess_title(lines: List[str]) -> Optional[str]:
-    explicit_titles = ["电话销售", "电销", "销售顾问", "销售代表", "客户经理", "大客户销售", "渠道销售", "客服专员", "行政专员", "招聘专员", "运营专员", "商务拓展", "BD"]
+    explicit_titles = ["电话销售", "电销", "销售顾问", "销售代表", "销售主管", "区域销售经理", "区域经理", "客户经理", "大客户经理", "大客户销售", "客户拓展", "渠道销售", "招商经理", "置业顾问", "理财顾问", "课程顾问", "会籍顾问", "客服专员", "行政专员", "招聘专员", "运营专员", "商务拓展", "BD"]
     for line in lines[:6]:
         for title in explicit_titles:
             if re.search(title, line, re.I):
                 return title
-        match = re.search(r"([一-龥A-Za-z]{0,8}(?:销售|客服|行政|招聘|运营|市场|商务|顾问|专员|经理|助理|工程师|实习生))", line, re.I)
+        match = re.search(r"([一-龥A-Za-z]{0,8}(?:销售|客服|行政|招聘|运营|市场|商务|拓展|主管|总监|顾问|专员|经理|助理|工程师|实习生))", line, re.I)
         if match:
             return match.group(1).strip(" -|")
     return None
@@ -340,6 +342,27 @@ def _looks_like_education(block: str) -> bool:
     return has_school and has_degree and not has_job_signal
 
 
+def _education_date_context(text: str, match: "re.Match") -> str:
+    """教育判定窗口：日期所在物理行；若该行除日期外几乎为空，再并入下一非空行。
+
+    解决“院校+学历写在日期同一行、其后紧跟‘工作经历’等求职信号”时，按整段判断
+    会被后续求职信号污染、把教育误当成一段经历的问题（见 R4）。
+    """
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_end = text.find("\n", match.end())
+    if line_end == -1:
+        line_end = len(text)
+    own = text[line_start:line_end]
+    if _looks_like_education(own):
+        return own
+    residual = (own[: match.start() - line_start] + own[match.end() - line_start :]).strip(" -|·、")
+    if len(residual) <= 2:  # 日期基本独占一行：教育常“日期一行、院校一行”
+        for line in text[line_end:].splitlines():
+            if line.strip():
+                return own + "\n" + line.strip()
+    return own
+
+
 def extract_experiences(text: str, education: Optional[List[Dict]] = None) -> List[Dict]:
     edu_start, edu_end = _education_window(education)
     matches = list(DATE_RANGE_RE.finditer(text))
@@ -348,7 +371,7 @@ def extract_experiences(text: str, education: Optional[List[Dict]] = None) -> Li
         block_start = match.start()
         block_end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
         block = text[block_start:block_end].strip()
-        if _looks_like_education(block):
+        if _looks_like_education(block) or _looks_like_education(_education_date_context(text, match)):
             # 纯教育条目不计入工作经历，避免虚假的低可信经历异常拉低评分。
             continue
         lines = [line.strip() for line in block.splitlines() if line.strip()]
@@ -420,7 +443,7 @@ def parse_resume_text(
         "experiences": extract_experiences(text, education=education),
         "source_text_length": len(text),
         "generation_time": datetime.now().isoformat(timespec="seconds"),
-        "version": "2.1",
+        "version": "2.2",
     }
     candidate["tenure_summary"] = calculate_tenure(candidate["experiences"])
     candidate["parsing_confidence"] = calculate_parsing_confidence(candidate)

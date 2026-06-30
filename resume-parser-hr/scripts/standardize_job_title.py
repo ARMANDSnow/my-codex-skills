@@ -17,17 +17,35 @@ JOB_SYNONYMS: Dict[str, str] = {
     "销售专员": "销售",
     "销售顾问": "销售",
     "销售经理": "销售",
+    "销售主管": "销售",
+    "区域经理": "销售",
+    "区域销售经理": "销售",
+    "区域销售": "销售",
+    "置业顾问": "销售",
+    "理财顾问": "销售",
+    "课程顾问": "销售",
+    "会籍顾问": "销售",
+    "招生顾问": "销售",
+    "sales": "销售",
+    "sales representative": "销售",
+    "account manager": "销售",
+    "account executive": "销售",
     "业务员": "销售",
     "业务代表": "销售",
     "面销": "面销",
     "门店销售": "面销",
     "导购": "面销",
     "大客户销售": "大客户销售",
+    "大客户经理": "大客户销售",
     "客户经理": "大客户销售",
+    "客户拓展": "大客户销售",
+    "客户主管": "大客户销售",
+    "客户代表": "大客户销售",
     "ka销售": "大客户销售",
     "渠道销售": "渠道销售",
     "渠道经理": "渠道销售",
     "招商专员": "渠道销售",
+    "招商经理": "渠道销售",
     "bd": "商务拓展",
     "商务拓展": "商务拓展",
     "商务经理": "商务拓展",
@@ -80,9 +98,11 @@ def standardize_job_title(raw_title: str | None) -> str:
     cleaned = clean_title(raw_title)
     if cleaned in JOB_SYNONYMS:
         return JOB_SYNONYMS[cleaned]
-    for key, standard in JOB_SYNONYMS.items():
+    # 只认「同义词键作为子串出现在输入里」这一个方向；按键长度降序，优先命中更具体的岗位，
+    # 避免泛词（如输入“销售”）反向命中到更长的键（“电话销售”）而被错标。
+    for key, standard in sorted(JOB_SYNONYMS.items(), key=lambda kv: len(kv[0]), reverse=True):
         key_clean = clean_title(key)
-        if key_clean and (key_clean in cleaned or cleaned in key_clean):
+        if key_clean and key_clean in cleaned:
             return standard
     if "销售" in raw_title:
         return "销售"
