@@ -12,12 +12,12 @@ from typing import Dict, List, Optional
 
 try:
     from .calculate_tenure import calculate_tenure, detect_overlaps, months_between, parse_date
-    from .recommendation_engine import recommend
+    from .recommendation_engine import recommend, resolve_threshold
     from .standardize_job_title import standardize_job_title
     from .validate_anomalies import calculate_experience_credibility, run_all_validations
 except ImportError:
     from calculate_tenure import calculate_tenure, detect_overlaps, months_between, parse_date
-    from recommendation_engine import recommend
+    from recommendation_engine import recommend, resolve_threshold
     from standardize_job_title import standardize_job_title
     from validate_anomalies import calculate_experience_credibility, run_all_validations
 
@@ -406,7 +406,12 @@ def calculate_parsing_confidence(candidate: Dict) -> float:
     return round(completeness * 0.6 + (1 - low_ratio) * 0.4, 2)
 
 
-def parse_resume_text(text: str, jd_text: Optional[str] = None, job_title: Optional[str] = None) -> Dict:
+def parse_resume_text(
+    text: str,
+    jd_text: Optional[str] = None,
+    job_title: Optional[str] = None,
+    pass_threshold: Optional[float] = None,
+) -> Dict:
     text = normalize_text(text)
     education = extract_education(text)
     candidate = {
@@ -422,7 +427,7 @@ def parse_resume_text(text: str, jd_text: Optional[str] = None, job_title: Optio
     candidate["resume_recency"] = detect_resume_recency(text)
     run_all_validations(candidate)
     if jd_text or job_title:
-        candidate["recommendation"] = recommend(candidate, jd_text, job_title)
+        candidate["recommendation"] = recommend(candidate, jd_text, job_title, pass_threshold=pass_threshold)
     return candidate
 
 
@@ -431,13 +436,22 @@ def main() -> None:
     parser.add_argument("resume", help="Path to PDF, DOCX, TXT, MD, or image resume file")
     parser.add_argument("--jd", help="JD text or path to JD text file", default="")
     parser.add_argument("--job-title", help="Target job title", default="")
+    parser.add_argument(
+        "--pass-threshold",
+        type=float,
+        default=None,
+        help="证据强度免复核通过阈值（0-100），默认 75，可用环境变量 HR_PASS_THRESHOLD 覆盖",
+    )
     args = parser.parse_args()
 
     jd_text = args.jd
     if jd_text and Path(jd_text).exists():
         jd_text = Path(jd_text).read_text(encoding="utf-8", errors="ignore")
 
-    card = parse_resume_text(extract_text(args.resume), jd_text=jd_text, job_title=args.job_title)
+    threshold = resolve_threshold(args.pass_threshold)
+    card = parse_resume_text(
+        extract_text(args.resume), jd_text=jd_text, job_title=args.job_title, pass_threshold=threshold
+    )
     print(json.dumps(card, ensure_ascii=False, indent=2))
 
 

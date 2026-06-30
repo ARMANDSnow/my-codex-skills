@@ -13,11 +13,11 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
     from .parse_resume import extract_text, parse_resume_text
-    from .recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences
+    from .recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences, resolve_threshold
     from .calculate_tenure import months_between, parse_date
 except ImportError:
     from parse_resume import extract_text, parse_resume_text
-    from recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences
+    from recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences, resolve_threshold
     from calculate_tenure import months_between, parse_date
 
 
@@ -30,7 +30,8 @@ DEFAULT_WEIGHTS = {
     "stability_gap": 0.15,
     "parsing_confidence": 0.10,
 }
-RESULT_ORDER = {"强推荐": 0, "待审核": 1, "暂不推荐": 2}
+# RESULT_ORDER = {"强推荐": 0, "待审核": 1, "暂不推荐": 2}  # 三档推荐等级已下线，保留以便回溯
+STATUS_ORDER = {"✅ 通过": 0, "✅⚠️": 1, "待筛选": 2}
 
 
 def load_text_or_path(value: str) -> str:
@@ -205,6 +206,8 @@ def stability_gap_score(candidate: Dict) -> float:
     return max(0.0, min(1.0, (stability_score + gap_score) / 2))
 
 
+# 注：JD 加权匹配分已下线，批量表改用单一「证据强度综合评分」(recommendation.score_100)。
+# 本函数及上方权重机制（DEFAULT_WEIGHTS / load_weights / --weights）保留以便回溯，当前不参与打分。
 def calculate_match_score(candidate: Dict, jd: Dict, job_title: str, weights: Dict[str, float]) -> float:
     min_months = jd.get("min_experience_months") or 6
     relevant_months = relevant_experience_months(candidate, job_title)
@@ -245,18 +248,26 @@ def mismatch_items(candidate: Dict) -> List[str]:
 
 
 def short_comment(candidate: Dict, hits: List[str], mismatches: List[str]) -> str:
-    result = candidate.get("recommendation", {}).get("result", "待审核")
+    recommendation = candidate.get("recommendation", {})
+    status = recommendation.get("status", "待筛选")
     hit_text = "、".join(hits[:3]) if hits else "命中点较少"
     risk_text = "；" + mismatches[0] if mismatches else ""
-    comment = f"{result}：{hit_text}{risk_text}"
-    return comment[:50]
+    base = f"{status}：{hit_text}{risk_text}"[:46]
+    # 有 P0 时把具体内容加粗拼进评语，确保只看评语列也能看到（在 [:46] 截断后追加，保证 ** 配对）。
+    p0_remark = recommendation.get("p0_remark", "")
+    p0_text = f"；**P0：{p0_remark[:40]}**" if p0_remark else ""
+    return base + p0_text
 
 
 def row_from_candidate(path: Path, candidate: Dict, jd: Dict, job_title: str, weights: Dict[str, float]) -> Dict:
     recommendation = candidate.get("recommendation", {})
-    if candidate.get("parsing_confidence", 0) < 0.6 and recommendation.get("result") == "强推荐":
+    status = recommendation.get("status", "待筛选")
+    # 解析置信度过低时不应盲目免复核：即便分数达标也降为「待筛选」（独立于 P0 兜底逻辑）。
+    if candidate.get("parsing_confidence", 0) < 0.6 and status in {"✅ 通过", "✅⚠️"}:
         recommendation = dict(recommendation)
-        recommendation["result"] = "待审核"
+        status = "待筛选"
+        recommendation["status"] = status
+        recommendation["result"] = status
         recommendation["reason"] = (recommendation.get("reason", "") + "；解析置信度低，需人工复核").strip("；")
         candidate["recommendation"] = recommendation
 
@@ -266,14 +277,15 @@ def row_from_candidate(path: Path, candidate: Dict, jd: Dict, job_title: str, we
     row = {
         "source_file": path.name,
         "candidate": candidate.get("basic_info", {}).get("name") or path.stem,
-        "recommendation": recommendation.get("result", "待审核"),
-        "match_score": calculate_match_score(candidate, jd, job_title, weights),
+        "status": status,
+        "evidence_score": recommendation.get("score_100", 0),
         "recommendation_score": recommendation.get("score", 0),
         "parsing_confidence": candidate.get("parsing_confidence", 0),
         "education": highest_degree(candidate),
         "relevant_experience_months": relevant_experience_months(candidate, job_title),
         "keyword_hits": "、".join(hits) if hits else "-",
         "mismatch_items": "；".join(mismatches) if mismatches else "-",
+        "p0_remark": recommendation.get("p0_remark", ""),
         "review_reasons": "；".join(reasons) if reasons else "-",
         "comment": short_comment(candidate, hits, mismatches),
         "candidate_card": candidate,
@@ -285,16 +297,17 @@ def unparsed_row(path: Path, reason: str) -> Dict:
     return {
         "source_file": path.name,
         "candidate": path.stem,
-        "recommendation": "待审核",
-        "match_score": 0.0,
+        "status": "待筛选",
+        "evidence_score": 0,
         "recommendation_score": 0,
         "parsing_confidence": 0,
         "education": "未解析",
         "relevant_experience_months": 0,
         "keyword_hits": "-",
         "mismatch_items": "-",
+        "p0_remark": "",
         "review_reasons": reason,
-        "comment": "待审核：文件未完成解析，需人工处理",
+        "comment": "待筛选：文件未完成解析，需人工处理",
         "candidate_card": None,
     }
 
@@ -303,34 +316,36 @@ def sort_rows(rows: List[Dict]) -> List[Dict]:
     return sorted(
         rows,
         key=lambda row: (
-            RESULT_ORDER.get(row.get("recommendation"), 9),
+            STATUS_ORDER.get(row.get("status"), 9),
+            -float(row.get("evidence_score") or 0),
             -float(row.get("recommendation_score") or 0),
-            -float(row.get("match_score") or 0),
         ),
     )
 
 
 DISPLAY_FIELDS = [
     "candidate",
-    "recommendation",
-    "match_score",
+    "status",
+    "evidence_score",
     "parsing_confidence",
     "education",
     "relevant_experience_months",
     "keyword_hits",
     "mismatch_items",
+    "p0_remark",
     "review_reasons",
     "comment",
 ]
 FIELD_LABELS = {
     "candidate": "候选人",
-    "recommendation": "推荐",
-    "match_score": "匹配分",
+    "status": "状态",
+    "evidence_score": "综合评分",
     "parsing_confidence": "解析置信度",
     "education": "学历",
     "relevant_experience_months": "相关经验月数",
     "keyword_hits": "命中关键词",
     "mismatch_items": "不匹配项",
+    "p0_remark": "P0高亮",
     "review_reasons": "人工复核原因",
     "comment": "评语",
 }
@@ -345,7 +360,12 @@ def markdown_table(rows: List[Dict], warnings: List[str]) -> str:
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join("---" for _ in header) + " |")
     for row in rows:
-        values = [str(row.get(field, "-")).replace("\n", " ").replace("|", "/") for field in DISPLAY_FIELDS]
+        values = []
+        for field in DISPLAY_FIELDS:
+            cell = str(row.get(field, "-")).replace("\n", " ").replace("|", "/")
+            if field == "p0_remark":
+                cell = f"**{cell}**" if cell and cell != "-" else "-"
+            values.append(cell)
         lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines)
 
@@ -371,7 +391,7 @@ def write_output(rows: List[Dict], output: str | None, warnings: List[str]) -> N
     path.write_text(markdown_table(rows, warnings), encoding="utf-8")
 
 
-def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str, float]) -> List[Dict]:
+def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str, float], pass_threshold: Optional[float] = None) -> List[Dict]:
     jd = parse_jd(jd_text)
     effective_job_title = job_title or jd.get("job_title") or "销售"
     rows: List[Dict] = []
@@ -385,7 +405,7 @@ def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str,
             # 先尝试 OCR；依赖未装/失败时优雅降级为人工处理（不中断批量）。
             try:
                 text = extract_text(str(path))
-                candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title)
+                candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title, pass_threshold=pass_threshold)
                 row = row_from_candidate(path, candidate, jd, effective_job_title, weights)
                 note = "图片经 OCR 解析，建议人工二次确认"
                 existing = row.get("review_reasons", "")
@@ -399,7 +419,7 @@ def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str,
             continue
         try:
             text = extract_text(str(path))
-            candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title)
+            candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title, pass_threshold=pass_threshold)
             rows.append(row_from_candidate(path, candidate, jd, effective_job_title, weights))
         except Exception as exc:  # noqa: BLE001 - one bad resume must not stop the batch.
             rows.append(unparsed_row(path, f"解析失败：{exc}"))
@@ -411,7 +431,13 @@ def main() -> None:
     parser.add_argument("resume_dir", help="Directory containing resumes")
     parser.add_argument("--jd", required=True, help="JD text or path to a JD text file")
     parser.add_argument("--job-title", default="", help="Target job title")
-    parser.add_argument("--weights", default="", help="Optional .docx/.xlsx weighting file")
+    parser.add_argument("--weights", default="", help="（已弃用，保留兼容）旧 JD 匹配分权重文件；当前评分改为单一证据强度分，不再生效")
+    parser.add_argument(
+        "--pass-threshold",
+        type=float,
+        default=None,
+        help="证据强度免复核通过阈值（0-100），默认 75，可用环境变量 HR_PASS_THRESHOLD 覆盖",
+    )
     parser.add_argument("--output", default="", help="Optional .md/.csv/.json output path")
     args = parser.parse_args()
 
@@ -422,10 +448,13 @@ def main() -> None:
     if not jd_text.strip():
         raise SystemExit("JD 不能为空：请通过 --jd 提供 JD 文件路径或文本")
     weights, warnings = load_weights(args.weights)
+    if args.weights:
+        print("提示：评分已改为单一证据强度分，--weights 不再参与打分（仅保留兼容）。", file=sys.stderr)
     for warning in warnings:
         print(f"警告：{warning}", file=sys.stderr)
+    threshold = resolve_threshold(args.pass_threshold)
     try:
-        rows = run_batch(resume_dir, jd_text, args.job_title, weights)
+        rows = run_batch(resume_dir, jd_text, args.job_title, weights, pass_threshold=threshold)
     except RuntimeError as exc:
         raise SystemExit(str(exc)) from exc
     write_output(rows, args.output or None, warnings)
