@@ -43,7 +43,7 @@ EXPECTED_VERSION = "2.2"
 # 发布时生成的完整性清单（相对 skill 根目录）。任何不匹配 = 文件被改动/损坏/旧版。
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
-    "SKILL.md": "f2bb9a5d9374491889dcabff385b6f58453200d221fe8fb1795a3f948d8bc766",
+    "SKILL.md": "af51d9be8f8c16bed52e19c90762206dbaa3f39819d4b1cf574d8a466c673418",
     "scripts/parse_resume.py": "af39587feff234ee87531b1289e0fc9f1a90299c3973d82f79ddee2645a8e760",
     "scripts/recommendation_engine.py": "8075e23d8d3f93facc5e5172680cadce564a2dc0dc363e86765ba6b2bad36f83",
     "scripts/validate_anomalies.py": "6a1dc8fa8e8a65931cc56adb0e55ac5e34b067e45bd6612cdd1fd8c1a433f49a",

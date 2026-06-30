@@ -49,6 +49,21 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 
 批量入口会扫描目录中的 `.pdf`、`.docx`、`.txt`、`.md` 简历，逐份调用单份解析引擎，并输出推荐排序表。图片类简历（`.jpg/.jpeg/.png`）若环境装有 OCR 库（pytesseract 或 paddleocr）会自动 OCR 解析并标注“建议人工二次确认”，否则降级为“需人工处理”，不影响其他简历。
 
+### 目标岗位与 JD 来源（重要）
+
+筛选哪个岗位、用什么门槛，**完全由运行时这两个参数决定；脚本不会自动扫描任何目录找 JD**：
+
+- `--job-title <岗位>`：目标岗位（如 `电话销售`），决定与候选人经历算相关度的基准。
+- `--jd <JD文件路径或文本>`：这份 JD 会被解析出学历、技能关键词、最低经验年限等门槛。
+
+各岗位 JD 一般由 HR 维护在 skill 目录下的 `knowledge/` 里（每个岗位一个文件）。**要筛某个岗位，就在运行时把对应 JD 文件路径传给 `--jd`**：
+
+```bash
+python3 scripts/batch_screen_resumes.py path/to/resumes --jd knowledge/电话销售.txt --job-title 电话销售
+```
+
+> **给 agent 的约定**：用户/HR 指明要筛的岗位后，先到 `knowledge/` 目录找到对应岗位的 JD 文件，把它的**路径**作为 `--jd` 传入再运行；**不要凭记忆编造 JD**。若找不到对应 JD，就向用户确认 JD 文件位置，而不是默认。仅当确实没有 JD、也没传 `--job-title` 时，脚本才按“销售”通用口径兜底（此时不读取 `knowledge/`）。
+
 可选参数：
 
 - `--pass-threshold 75`：免复核通过阈值（0-100），默认 75；也可用环境变量 `HR_PASS_THRESHOLD` 设置（优先级 CLI > 环境变量 > 默认）。单份 `parse_resume.py` 同样支持该参数，单份与批量口径一致。
