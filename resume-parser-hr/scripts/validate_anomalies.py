@@ -257,6 +257,19 @@ def _gap_explanation_score(experiences: List[Dict]) -> float:
     return 0.85 if _gap_reason_match(text) else 0.35
 
 
+def _gap_recency_weight(years_since: float) -> float:
+    """空窗罚分的时间衰减权重：越久以前的空窗罚得越轻。
+
+    近 2 年内全额计罚（1.0）；2-5 年线性衰减；5 年以上降到下限 0.2
+    （仍保留少量罚分，HR 在 gap_details 仍能看到该空窗，但不至于把资深候选人拖垮）。
+    """
+    if years_since <= 2:
+        return 1.0
+    if years_since >= 5:
+        return 0.2
+    return 1.0 - (years_since - 2) / 3 * 0.8
+
+
 def _format_gap_note(detail: Dict) -> str:
     """Human-readable one-line explanation for a single employment gap."""
     if detail.get("from_date") and detail.get("to_date"):
@@ -319,6 +332,7 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
     gaps = []
     recent_gaps = []
     gap_details = []
+    longest_penalties = []  # 各段空窗经时间衰减后的罚分占比（0..1），用于“最长空窗”项
     for idx in range(len(full_time) - 1):
         prev_exp = full_time[idx]
         next_exp = full_time[idx + 1]
@@ -330,6 +344,10 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             within_5y = bool(start and start >= five_years_ago)
             if within_5y:
                 recent_gaps.append(gap)
+            # 该空窗距今年数（以空窗结束、即下一段开始为锚点）→ 时间衰减权重
+            years_since = (now - start).days / 365.25 if start else 0.0
+            base_penalty = min(gap, 6) / 6  # 该空窗的满罚占比（>=6 个月即满）
+            longest_penalties.append(base_penalty * _gap_recency_weight(years_since))
             reason_text = " ".join([
                 prev_exp.get("description", "") or "",
                 prev_exp.get("gap_reason", "") or "",
@@ -363,19 +381,21 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         )
     else:
         gap_summary = "正式工作之间无明显空窗（≥1 个月）。"
+    # 最长空窗项加时间衰减：取各段空窗“衰减后罚分占比”的最大值，老空窗罚得轻。
+    longest_penalty = max(longest_penalties) if longest_penalties else 0.0
     gap_score = 100 * (
         0.50 * (1 - min(total_recent_gap, 12) / 12)
-        + 0.30 * (1 - min(longest_gap, 6) / 6)
+        + 0.30 * (1 - longest_penalty)
         + 0.20 * explanation
     )
     # Gap 分三项构成，让 HR 看懂分数怎么来的（口径同 references/validation_rules.md）。
     recent_part = round(100 * 0.50 * (1 - min(total_recent_gap, 12) / 12), 1)
-    longest_part = round(100 * 0.30 * (1 - min(longest_gap, 6) / 6), 1)
+    longest_part = round(100 * 0.30 * (1 - longest_penalty), 1)
     explain_part = round(100 * 0.20 * explanation, 1)
     gap_score_breakdown = (
         f"Gap 分 {round(gap_score, 1)} = 近5年Gap项 {recent_part}"
         f"（近5年空窗 {total_recent_gap} 个月，满分50）"
-        f" + 最长Gap项 {longest_part}（最长 {longest_gap} 个月，满分30）"
+        f" + 最长Gap项 {longest_part}（最长 {longest_gap} 个月，已按距今年数时间衰减，满分30）"
         f" + 说明项 {explain_part}（说明系数 {round(explanation, 2)}，满分20）"
     )
 
