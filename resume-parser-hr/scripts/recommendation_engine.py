@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Dict, List, Optional, Tuple
 
@@ -157,7 +158,7 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
         if gap_score < 70:
             unmet.append(f"Gap分不足70分（当前{gap_score}）")
         if relevant and not high_credible_relevant and not any(_has_sales_evidence(exp) for exp in credible_relevant):
-            unmet.append("销售相关经历缺少强证据，不能强推荐")
+            unmet.append("销售相关经历缺少强证据")
 
     return len(unmet) == 0, unmet, evidence
 
@@ -213,7 +214,101 @@ def calculate_recommendation_score(strong_met: bool, weak: List[str], downgrade:
     return round(max(0.0, min(1.0, score)), 2)
 
 
-def recommend(candidate: Dict, jd_text: Optional[str] = None, job_title: Optional[str] = None) -> Dict:
+# —— 0-100「证据强度综合评分」与「免复核通过」阈值 ——
+# 满分 100：BASE(强判据) + WEAK(弱判据) + RELEVANT(相关经验厚度) + STABILITY(稳定/Gap)
+#           - DOWNGRADE(降权) - ANOMALY(P1/P2) - P0_DAMPEN(P0 软抑制)
+EVIDENCE_BASE = 45.0          # 强判据满足的地基分（单独满足仍不足 75）
+WEAK_UNIT = 3.6              # 每项弱判据加分
+WEAK_CAP = 5                 # 弱判据当前最多 5 项 → 满档 18
+REL_MONTHS_FULL = 12.0      # 可信相关经验满 12 个月给满月数分
+REL_MONTHS_PTS = 12.0       # 月数桶满分
+REL_COUNT_UNIT = 4.0        # 每段高可信相关经历加分
+REL_COUNT_CAP = 2           # 高可信相关经历封顶 2 段 → 满档 8（月数+段数合计 20）
+STABILITY_W = 10.0          # 履历稳定分权重（吃 0-100 连续值）
+GAP_W = 7.0                 # Gap 分权重（吃 0-100 连续值）
+DOWNGRADE_UNIT = 6.0        # 每个降权因子扣分
+DOWNGRADE_CAP = 3           # 降权封顶 3 项 → -18
+P1_PENALTY = 8.0            # 每个 P1 异常扣分
+P2_PENALTY = 3.0            # 每个 P2 异常扣分
+P0_DAMPEN_UNIT = 6.0        # 每个 P0 软抑制（不硬拦截，由 status 标签兜底）
+P0_DAMPEN_CAP = 12.0        # P0 软抑制封顶，保证证据极强者仍可能 ≥ 阈值落入 ✅⚠️
+DEFAULT_PASS_THRESHOLD = 75.0
+
+
+def resolve_threshold(cli_value: Optional[float] = None) -> float:
+    """免复核通过阈值优先级：CLI 显式值 > 环境变量 HR_PASS_THRESHOLD > 默认 75。"""
+    if cli_value is not None:
+        try:
+            return float(cli_value)
+        except (TypeError, ValueError):
+            pass
+    env_value = os.environ.get("HR_PASS_THRESHOLD")
+    if env_value:
+        try:
+            return float(env_value)
+        except ValueError:
+            pass
+    return DEFAULT_PASS_THRESHOLD
+
+
+def calculate_evidence_score(
+    strong_met: bool,
+    weak: List[str],
+    downgrade: List[str],
+    evidence: Dict,
+    stability_scores: Dict,
+    anomalies: List[Dict],
+) -> float:
+    """0-100 证据强度综合评分。复用推荐引擎已算好的信号，不新增抽取。
+
+    P0 仅软抑制分数（不硬拦截）——是否免复核交给 evidence_status 的状态标签。
+    与 calculate_recommendation_score 一致，仅对「参与评分」的异常计扣分。
+    """
+    scoring_anomalies = [
+        item for item in anomalies if "不参与评分" not in (item.get("action") or "")
+    ]
+    p0_count = len([item for item in scoring_anomalies if item.get("level") == "P0"])
+    p1_count = len([item for item in scoring_anomalies if item.get("level") == "P1"])
+    p2_count = len([item for item in scoring_anomalies if item.get("level") == "P2"])
+
+    base = EVIDENCE_BASE if strong_met else 0.0
+    weak_pts = min(len(weak), WEAK_CAP) * WEAK_UNIT
+
+    credible_months = evidence.get("credible_relevant_months", 0) or 0
+    high_credible_count = evidence.get("high_credible_relevant_count", 0) or 0
+    relevant_pts = (
+        min(credible_months / REL_MONTHS_FULL, 1.0) * REL_MONTHS_PTS
+        + min(high_credible_count, REL_COUNT_CAP) * REL_COUNT_UNIT
+    )
+
+    stability_score = float(stability_scores.get("stability_score") or 0)
+    gap_score = float(stability_scores.get("gap_score") or 0)
+    stability_pts = (stability_score / 100) * STABILITY_W + (gap_score / 100) * GAP_W
+
+    downgrade_penalty = min(len(downgrade), DOWNGRADE_CAP) * DOWNGRADE_UNIT
+    anomaly_penalty = p1_count * P1_PENALTY + p2_count * P2_PENALTY
+    p0_dampen = min(min(p0_count, 2) * P0_DAMPEN_UNIT, P0_DAMPEN_CAP)
+
+    score = (
+        base + weak_pts + relevant_pts + stability_pts
+        - downgrade_penalty - anomaly_penalty - p0_dampen
+    )
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def evidence_status(score_100: float, threshold: float, p0_items: List[Dict]) -> str:
+    """证据分 → 状态标签：✅ 通过 / ✅⚠️（达标但有 P0）/ 待筛选。"""
+    if score_100 >= threshold:
+        return "✅⚠️" if p0_items else "✅ 通过"
+    return "待筛选"
+
+
+def recommend(
+    candidate: Dict,
+    jd_text: Optional[str] = None,
+    job_title: Optional[str] = None,
+    pass_threshold: Optional[float] = None,
+) -> Dict:
     jd = parse_jd(jd_text or "")
     target = standardize_job_title(job_title or jd.get("job_title") or "销售")
 
@@ -226,15 +321,31 @@ def recommend(candidate: Dict, jd_text: Optional[str] = None, job_title: Optiona
     score = calculate_recommendation_score(strong_met, weak, downgrade, anomalies)
     p0 = [item for item in scoring_anomalies if item.get("level") == "P0"]
 
-    if strong_met and score >= 0.7 and not p0:
-        result = "强推荐"
-    elif score >= 0.35 or p0 or unmet:
-        result = "待审核"
-    else:
-        result = "暂不推荐"
+    threshold = resolve_threshold(pass_threshold)
+    # BASE 只看实质性强判据（学历/经验/相关性/稳定性/销售证据），把「异常门」剥离：
+    # P0 改为软抑制 + ✅⚠️ 标签，P1 数量改为扣分——否则带 P0 者 BASE 归零、永远到不了阈值，
+    # ✅⚠️ 兜底态形同虚设。
+    core_unmet = [u for u in unmet if "P0异常" not in u and "P1异常超过" not in u]
+    strong_core_met = len(core_unmet) == 0
+    score_100 = calculate_evidence_score(
+        strong_core_met, weak, downgrade, evidence,
+        candidate.get("stability_scores", {}), anomalies,
+    )
+    status = evidence_status(score_100, threshold, p0)
+    p0_remark = "；".join(
+        f"{item.get('type')}：{item.get('description')}" for item in p0
+    )
 
-    if any("低可信相关经历" in item for item in downgrade) and result == "强推荐":
-        result = "待审核"
+    # —— 三档推荐等级（强推荐/待审核/暂不推荐）已下线，改用证据分 + status 标签。
+    #    保留以下逻辑以便回溯，如需恢复取消注释即可。 ——
+    # if strong_met and score >= 0.7 and not p0:
+    #     result = "强推荐"
+    # elif score >= 0.35 or p0 or unmet:
+    #     result = "待审核"
+    # else:
+    #     result = "暂不推荐"
+    # if any("低可信相关经历" in item for item in downgrade) and result == "强推荐":
+    #     result = "待审核"
 
     reason_parts = []
     reason_parts.append("满足强判据" if strong_met else "强判据未满足：" + "、".join(unmet[:4]))
@@ -243,15 +354,23 @@ def recommend(candidate: Dict, jd_text: Optional[str] = None, job_title: Optiona
     if downgrade:
         reason_parts.append("风险：" + "、".join(downgrade[:4]))
     if p0:
-        reason_parts.append(f"存在{len(p0)}个P0异常，需强制复核")
+        reason_parts.append(f"存在{len(p0)}个P0异常，已在状态高亮，建议关注")
 
     parsing_confidence = candidate.get("parsing_confidence", 0.75)
     confidence = round(max(0.0, min(1.0, parsing_confidence * 0.65 + score * 0.35)), 2)
     return {
-        "result": result,
+        "result": status,            # 兼容旧键：置为 status，供下游排序/读取
+        "status": status,            # ✅ 通过 / ✅⚠️ / 待筛选
+        "score_100": score_100,      # 0-100 统一证据强度综合评分
+        "pass_threshold": threshold,
+        "p0_items": [
+            {"type": item.get("type"), "description": item.get("description")}
+            for item in p0
+        ],
+        "p0_remark": p0_remark,
         "reason": "；".join(reason_parts),
         "confidence": confidence,
-        "score": score,
+        "score": score,              # 保留 0-1 内部分（confidence 计算/兼容下游）
         "target_job_title": target,
         "details": {
             "strong_criteria_met": strong_met,

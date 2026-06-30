@@ -93,7 +93,12 @@
   },
   "anomalies": [],
   "recommendation": {
-    "result": "强推荐",
+    "result": "✅ 通过",
+    "status": "✅ 通过",
+    "score_100": 96.6,
+    "pass_threshold": 75.0,
+    "p0_items": [],
+    "p0_remark": "",
     "reason": "满足强判据；优势：有客户沟通经验、简历表达和字段完整度较好、稳定性尚可、有销售或业务结果指标",
     "confidence": 0.93,
     "score": 0.8,
