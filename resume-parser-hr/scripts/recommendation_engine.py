@@ -18,6 +18,12 @@ except ImportError:
 DEGREE_ORDER = {"不限": 0, "高中": 1, "中专": 1, "大专": 2, "本科": 3, "硕士": 4, "博士": 5}
 SALES_JOB_PATTERNS = ["电话销售", "电销", "销售顾问", "销售代表", "客户经理", "大客户销售", "渠道销售", "招商", "BD", "商务拓展", "面销", "销售"]
 
+# 相关经验「计入厚度」的可信度下限：只要是相关岗位 + 正式/实习 + 有效时长即计入。
+# 描述是否详实（量化业绩）只影响可信度/证据强度，不应让真实长年限经验被算成 0（见 R1）。
+RELEVANT_CRED_FLOOR = 0.3
+# 相关经验达到该月数即视为「长年限本身即证据」，不再因缺量化业绩而判“缺少强证据”。
+SUBSTANTIAL_RELEVANT_MONTHS = 24
+
 
 def parse_jd(jd_text: str) -> Dict:
     result = {
@@ -107,6 +113,38 @@ def related_experiences(candidate: Dict, job_title: str, threshold: float = 0.5)
     return result
 
 
+def relevant_experience_months(candidate: Dict, job_title: str, cred_floor: float = 0.4) -> int:
+    """相关经验月数（按时间区间取并集，避免同期多段被重复累加）。
+
+    单份强判据与批量筛选表共用此口径（修 R6 口径不一致）。``cred_floor`` 控制计入门槛：
+    强判据/展示用 RELEVANT_CRED_FLOOR(0.3)——“岗位名+有效时间”即算数；
+    高可信加分桶另用 0.7 单独统计，互不影响。
+    """
+    try:
+        from .calculate_tenure import months_between, parse_date
+    except ImportError:
+        from calculate_tenure import months_between, parse_date
+
+    intervals = []
+    for exp in related_experiences(candidate, job_title):
+        if exp.get("credibility_score", 0) >= cred_floor and exp.get("type") in {"正式工作", "实习"}:
+            start = parse_date(exp.get("start_date"))
+            end = parse_date(exp.get("end_date"))
+            if start and end and start <= end:
+                intervals.append((start, end))
+    if not intervals:
+        return 0
+    intervals.sort()
+    merged = [intervals[0]]
+    for start, end in intervals[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:  # 与上一段重叠则合并
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    return sum(months_between(s, e) for s, e in merged)
+
+
 def _has_sales_evidence(exp: Dict) -> bool:
     desc = exp.get("description", "") or ""
     return bool(PERFORMANCE_RE.search(desc) or CUSTOMER_RE.search(desc))
@@ -125,14 +163,18 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
 
     relevant = related_experiences(candidate, target)
     min_months = jd.get("min_experience_months") or (6 if sales_position and not jd.get("accept_no_experience") else 0)
+    # 相关经验厚度：相关岗位 + 正式/实习 + 有效时长即计入（区间并集）。描述是否详实只影响
+    # 可信度/证据强度，不再让真实长年限经验被算成 0（见 R1）。高可信另用 0.7 单独统计加分。
+    relevant_months = relevant_experience_months(candidate, target, cred_floor=RELEVANT_CRED_FLOOR)
+    credible_months = relevant_experience_months(candidate, target, cred_floor=0.4)
     credible_relevant = [exp for exp in relevant if exp.get("credibility_score", 0) >= 0.4 and exp.get("type") in {"正式工作", "实习"}]
     high_credible_relevant = [exp for exp in relevant if exp.get("credibility_score", 0) >= 0.7]
-    credible_months = sum(exp.get("duration_months", 0) for exp in credible_relevant)
+    evidence["relevant_months"] = relevant_months
     evidence["credible_relevant_months"] = credible_months
     evidence["high_credible_relevant_count"] = len(high_credible_relevant)
 
-    if credible_months < min_months:
-        unmet.append(f"高/中可信相关经验不足{min_months}个月（当前{credible_months}个月）")
+    if relevant_months < min_months:
+        unmet.append(f"相关经验不足{min_months}个月（当前{relevant_months}个月）")
 
     sorted_exps = _sorted_experiences(candidate)
     last_exp = sorted_exps[-1] if sorted_exps else None
@@ -157,7 +199,14 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
             unmet.append(f"履历稳定分不足60分（当前{stability_score}）")
         if gap_score < 70:
             unmet.append(f"Gap分不足70分（当前{gap_score}）")
-        if relevant and not high_credible_relevant and not any(_has_sales_evidence(exp) for exp in credible_relevant):
+        if (
+            relevant
+            and relevant_months < SUBSTANTIAL_RELEVANT_MONTHS
+            and not high_credible_relevant
+            and not any(_has_sales_evidence(exp) for exp in credible_relevant)
+        ):
+            # 长年限相关经历本身即证据：仅短经历且无量化业绩时才判“缺少强证据”，
+            # 避免资深销售因没写业绩数字被归零 BASE（描述单薄改由低可信 P1/降权体现）。
             unmet.append("销售相关经历缺少强证据")
 
     return len(unmet) == 0, unmet, evidence
@@ -274,10 +323,12 @@ def calculate_evidence_score(
     base = EVIDENCE_BASE if strong_met else 0.0
     weak_pts = min(len(weak), WEAK_CAP) * WEAK_UNIT
 
-    credible_months = evidence.get("credible_relevant_months", 0) or 0
+    # 月数桶吃「相关经验厚度」(relevant_months，含描述单薄但真实的长年限)；
+    # 高可信段数桶单独奖励证据质量。兼容旧 evidence 仅有 credible_relevant_months 的情况。
+    relevant_months = evidence.get("relevant_months", evidence.get("credible_relevant_months", 0)) or 0
     high_credible_count = evidence.get("high_credible_relevant_count", 0) or 0
     relevant_pts = (
-        min(credible_months / REL_MONTHS_FULL, 1.0) * REL_MONTHS_PTS
+        min(relevant_months / REL_MONTHS_FULL, 1.0) * REL_MONTHS_PTS
         + min(high_credible_count, REL_COUNT_CAP) * REL_COUNT_UNIT
     )
 
@@ -348,6 +399,14 @@ def recommend(
     #     result = "待审核"
 
     reason_parts = []
+    rel_m = int(evidence.get("relevant_months", 0) or 0)
+    if rel_m > 0:
+        yrs, mos = divmod(rel_m, 12)
+        span = (f"{yrs}年" if yrs else "") + (f"{mos}个月" if mos else "")
+        thin = rel_m >= SUBSTANTIAL_RELEVANT_MONTHS and evidence.get("high_credible_relevant_count", 0) == 0
+        reason_parts.append(
+            f"相关销售经历约{span}" + ("（但缺少量化业绩，建议人工核验）" if thin else "")
+        )
     reason_parts.append("满足强判据" if strong_met else "强判据未满足：" + "、".join(unmet[:4]))
     if weak:
         reason_parts.append("优势：" + "、".join(weak[:4]))

@@ -1,5 +1,6 @@
 ---
 name: resume-parser-hr
+version: 2.2
 description: 自动解析、批量筛选和评估 HR 招聘简历，适用于 PDF、Word、文本简历和岗位 JD。用于生成结构化候选人卡片、标准化岗位经历、正式工作/实习/项目分项工龄、销售岗证据强度评估、履历稳定性和 Gap 分、0-100 证据强度综合评分与免复核状态（✅ 通过/✅⚠️/待筛选）、时间线重叠、低可信经历、频繁跳槽等人工复核提示；评分达到阈值（默认 75，可配置）即免复核通过，HR 自愿承担风险，不达标进入人工筛选。
 ---
 
@@ -122,6 +123,7 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 - 批量筛选工作流：`references/batch_screening_workflow.md`
 - 合规规则：`references/compliance_policy.md`
 - 岗位词典说明：`references/job_title_synonyms.md`
+- 排障与自检（打分异常/疑似无经验时先看）：`references/troubleshooting.md`，自检脚本 `scripts/diagnose_resume.py`
 - 候选人展示模板：`assets/candidate_card_template.md`
 - 批量筛选表模板：`assets/screening_table_template.md`
 - 输出样例：`assets/output_example.json`

@@ -13,11 +13,17 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
     from .parse_resume import extract_text, parse_resume_text
-    from .recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences, resolve_threshold
+    from .recommendation_engine import (
+        DEGREE_ORDER, RELEVANT_CRED_FLOOR, parse_jd, related_experiences,
+        relevant_experience_months, resolve_threshold,
+    )
     from .calculate_tenure import months_between, parse_date
 except ImportError:
     from parse_resume import extract_text, parse_resume_text
-    from recommendation_engine import DEGREE_ORDER, parse_jd, related_experiences, resolve_threshold
+    from recommendation_engine import (
+        DEGREE_ORDER, RELEVANT_CRED_FLOOR, parse_jd, related_experiences,
+        relevant_experience_months, resolve_threshold,
+    )
     from calculate_tenure import months_between, parse_date
 
 
@@ -158,29 +164,6 @@ def education_score(candidate: Dict, jd: Dict) -> float:
     return 1.0 if candidate_level >= required else 0.0
 
 
-def relevant_experience_months(candidate: Dict, job_title: str) -> int:
-    # 按时间区间取并集计月数，避免同期多段（如应届生在校多份兼职）被重复累加，
-    # 同时不会因“保留最长主经历”而丢掉更相关但较短的经历信号。
-    intervals = []
-    for exp in related_experiences(candidate, job_title):
-        if exp.get("credibility_score", 0) >= 0.4 and exp.get("type") in {"正式工作", "实习"}:
-            start = parse_date(exp.get("start_date"))
-            end = parse_date(exp.get("end_date"))
-            if start and end and start <= end:
-                intervals.append((start, end))
-    if not intervals:
-        return 0
-    intervals.sort()
-    merged = [intervals[0]]
-    for start, end in intervals[1:]:
-        last_start, last_end = merged[-1]
-        if start <= last_end:  # 与上一段重叠则合并
-            merged[-1] = (last_start, max(last_end, end))
-        else:
-            merged.append((start, end))
-    return sum(months_between(start, end) for start, end in merged)
-
-
 def keyword_hits(candidate: Dict, jd: Dict) -> List[str]:
     jd_skills = jd.get("skills", []) or []
     text_parts = []
@@ -210,7 +193,7 @@ def stability_gap_score(candidate: Dict) -> float:
 # 本函数及上方权重机制（DEFAULT_WEIGHTS / load_weights / --weights）保留以便回溯，当前不参与打分。
 def calculate_match_score(candidate: Dict, jd: Dict, job_title: str, weights: Dict[str, float]) -> float:
     min_months = jd.get("min_experience_months") or 6
-    relevant_months = relevant_experience_months(candidate, job_title)
+    relevant_months = relevant_experience_months(candidate, job_title, cred_floor=RELEVANT_CRED_FLOOR)
     experience_score = min(relevant_months / max(min_months, 1), 1.0)
     skills = jd.get("skills", []) or []
     hits = keyword_hits(candidate, jd)
@@ -282,7 +265,7 @@ def row_from_candidate(path: Path, candidate: Dict, jd: Dict, job_title: str, we
         "recommendation_score": recommendation.get("score", 0),
         "parsing_confidence": candidate.get("parsing_confidence", 0),
         "education": highest_degree(candidate),
-        "relevant_experience_months": relevant_experience_months(candidate, job_title),
+        "relevant_experience_months": relevant_experience_months(candidate, job_title, cred_floor=RELEVANT_CRED_FLOOR),
         "keyword_hits": "、".join(hits) if hits else "-",
         "mismatch_items": "；".join(mismatches) if mismatches else "-",
         "p0_remark": recommendation.get("p0_remark", ""),
