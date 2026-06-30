@@ -410,6 +410,12 @@ def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str,
 
 
 def main() -> None:
+    # Windows 中文控制台(cp936)编不出表格里的 ✅ 等符号会让 print 崩溃；强制 utf-8、容错替换。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
     parser = argparse.ArgumentParser(description="Batch screen resumes against a target JD.")
     parser.add_argument("resume_dir", help="Directory containing resumes")
     parser.add_argument("--jd", required=True, help="JD text or path to a JD text file")

@@ -25,6 +25,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows 中文控制台默认 cp936/gbk 编不出 ✅❌⚠️ 等符号，会让 print 抛 UnicodeEncodeError
+# 直接崩掉。强制 stdout/stderr 走 utf-8，编不出的字符替换而非报错（兼容旧终端）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001 - 老版本 Python / 已被重定向时忽略
+        pass
+
 # 本脚本所在目录（scripts/），把它加入 import 路径，便于 `from parse_resume import ...`。
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -36,12 +44,12 @@ EXPECTED_VERSION = "2.2"
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
     "SKILL.md": "f2bb9a5d9374491889dcabff385b6f58453200d221fe8fb1795a3f948d8bc766",
-    "scripts/parse_resume.py": "0a0373f05d8266c2912765f23443a9a1f6a019ec4564a73de00acaf1d06f9dbf",
+    "scripts/parse_resume.py": "af39587feff234ee87531b1289e0fc9f1a90299c3973d82f79ddee2645a8e760",
     "scripts/recommendation_engine.py": "8075e23d8d3f93facc5e5172680cadce564a2dc0dc363e86765ba6b2bad36f83",
     "scripts/validate_anomalies.py": "6a1dc8fa8e8a65931cc56adb0e55ac5e34b067e45bd6612cdd1fd8c1a433f49a",
     "scripts/calculate_tenure.py": "6c7c74770b9376de9f045533864b522e854d3e8c2d09e8d7c4446519c1cd6a34",
     "scripts/standardize_job_title.py": "bc0a3f05320f9c26d7ee3e50ffcb713d1d31648bddcdca55535178433db19071",
-    "scripts/batch_screen_resumes.py": "6ea60ee2a0b213eea08215f4463fc88e4b6ce5d41bc407dbadf0e26d0299918c",
+    "scripts/batch_screen_resumes.py": "45a5766acfa169cd8aff80b871d6b3638a169f0493c2d71392442125fad8f5a3",
 }
 
 # 已知良好的“多年销售、描述单薄”简历（即真实世界最易踩坑的形态）。

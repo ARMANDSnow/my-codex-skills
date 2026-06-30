@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -454,7 +455,17 @@ def parse_resume_text(
     return candidate
 
 
+def _force_utf8_stdout() -> None:
+    """Windows 中文控制台(cp936)编不出输出里的 ✅ 等符号会让 print 崩溃；强制 utf-8、容错替换。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main() -> None:
+    _force_utf8_stdout()
     parser = argparse.ArgumentParser(description="Parse a resume into a structured HR candidate card.")
     parser.add_argument("resume", help="Path to PDF, DOCX, TXT, MD, or image resume file")
     parser.add_argument("--jd", help="JD text or path to JD text file", default="")
