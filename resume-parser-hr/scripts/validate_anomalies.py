@@ -102,10 +102,22 @@ def validate_time_ranges(experiences: List[Dict]) -> List[Dict]:
     return items
 
 
-def validate_overlaps(experiences: List[Dict]) -> List[Dict]:
+# 被误当成"经历"的教育条目（公司/岗位里含院校名）——不应参与工作时间重叠判定。
+_SCHOOL_RE = re.compile(r"大学|学院|职业技术|技工学校|技校|高中|中学|财经学院|师范")
+
+
+def validate_overlaps(experiences: List[Dict], edu_window: Tuple[Optional[datetime], Optional[datetime]] = (None, None)) -> List[Dict]:
+    _, edu_end = edu_window
     items = []
     dated: List[Tuple[Dict, datetime, datetime]] = []
     for exp in experiences:
+        company = exp.get("company") or ""
+        title = exp.get("job_title") or ""
+        # 教育条目被误切成经历时，公司/岗位常含院校名；空白"待确认"多半也是版面碎片——都不算并发工作。
+        if _SCHOOL_RE.search(company) or _SCHOOL_RE.search(title):
+            continue
+        if exp.get("type") == "待确认" and not company and not title:
+            continue
         start = parse_date(exp.get("start_date"))
         end = parse_date(exp.get("end_date"))
         if start and end and start <= end:
@@ -118,24 +130,27 @@ def validate_overlaps(experiences: List[Dict]) -> List[Dict]:
                 group.append(dated[j])
         if len(group) < 2:
             continue
-        full_time_count = sum(1 for exp, _, _ in group if exp.get("type") == "正式工作")
         types = [exp.get("type", "待确认") for exp, _, _ in group]
-        companies = "、".join(exp.get("company", "未知公司") for exp, _, _ in group)
+        companies = "、".join((exp.get("company") or "未知公司") for exp, _, _ in group)
+        # 「一边上学一边实习/上班」是常态，不是造假：只要重叠里有任一段在教育期内（起始 ≤ 毕业），
+        # 或含实习/校园项目，一律作"在校并行经历"P2 非评分提示——不判 P0/P1、不降权、不算不可信。
+        student_era = bool(edu_end) and any(s <= edu_end for _, s, _ in group)
+        has_intern_or_project = any(t in {"实习", "校园项目"} for t in types)
+        if student_era or has_intern_or_project:
+            items.append(anomaly(
+                "在校并行经历", "P2",
+                f"同期存在{len(group)}段经历（疑似在校并行/实习兼职，正常现象）：{companies}",
+                NO_SCORE_ACTION_PREFIX + "：确认是否为在校期间并行经历，正常无需扣分",
+            ))
+            continue
+        # 到这里都是"非在校、非实习"的经历重叠——才可能是真正的并发全职造假信号。
+        full_time_count = sum(1 for exp, _, _ in group if exp.get("type") == "正式工作")
         if full_time_count >= 2:
             items.append(anomaly("时间重叠异常", "P0", f"同期存在{full_time_count}段正式工作：{companies}", "强制复核"))
         elif len(group) >= 3:
-            # 应届生在校并行多段实习/兼职/项目是常态，不是造假信号：无任何正式工作并行时降为 P2 提示。
-            non_full_time_only = full_time_count == 0 and all(
-                t in {"实习", "校园项目", "自由职业/创业", "待确认"} for t in types
-            )
-            if non_full_time_only:
-                items.append(anomaly("在校并行经历", "P2", f"同期存在{len(group)}段实习/兼职/项目（疑似在校期间）：{companies}", NO_SCORE_ACTION_PREFIX + "：确认是否为在校并行经历"))
-            else:
-                items.append(anomaly("时间重叠异常", "P0", f"同期存在{len(group)}段经历：{companies}", "强制复核"))
-        elif "正式工作" in types and "实习" in types:
-            items.append(anomaly("全职实习重叠", "P1", f"正式工作与实习时间重叠：{companies}", "降权并复核"))
-        elif "校园项目" in types:
-            items.append(anomaly("项目经历重叠", "P2", f"项目/实习与其他经历重叠：{companies}", "增加追问"))
+            items.append(anomaly("时间重叠异常", "P0", f"同期存在{len(group)}段经历：{companies}", "强制复核"))
+        else:
+            items.append(anomaly("经历时间重叠", "P2", f"经历时间存在重叠：{companies}", "增加追问"))
     unique = []
     seen = set()
     for item in items:
@@ -149,6 +164,13 @@ def validate_overlaps(experiences: List[Dict]) -> List[Dict]:
 def validate_experience_credibility(experiences: List[Dict]) -> List[Dict]:
     items = []
     for exp in experiences:
+        company = exp.get("company") or ""
+        title = exp.get("job_title") or ""
+        # 被误切成经历的教育/版面碎片（院校名，或空白待确认）不是真实经历，不该判"经历可信度低"。
+        if _SCHOOL_RE.search(company) or _SCHOOL_RE.search(title):
+            continue
+        if exp.get("type") == "待确认" and not company and not title:
+            continue
         score = exp.get("credibility_score", calculate_experience_credibility(exp))
         if score < 0.4:
             items.append(anomaly("经历可信度低", "P1", f"{exp.get('company', '未知公司')} - {exp.get('job_title', '未知岗位')}缺少职责、指标、客户对象或时长", "降权"))
@@ -456,8 +478,13 @@ def run_all_validations(candidate: Dict) -> List[Dict]:
 
     items: List[Dict] = []
     age = candidate.get("basic_info", {}).get("age")
+    # 教育时间窗（最早入学 ~ 最晚毕业），用于把"在校期间的实习/兼职/工作重叠"判为正常。
+    edu = candidate.get("education", []) or []
+    edu_starts = [parse_date(e.get("start_date")) for e in edu if parse_date(e.get("start_date"))]
+    edu_ends = [parse_date(e.get("end_date")) for e in edu if parse_date(e.get("end_date"))]
+    edu_window = (min(edu_starts) if edu_starts else None, max(edu_ends) if edu_ends else None)
     items.extend(validate_time_ranges(experiences))
-    items.extend(validate_overlaps(experiences))
+    items.extend(validate_overlaps(experiences, edu_window))
     items.extend(validate_age_tenure(age, candidate.get("tenure_summary", {}).get("full_time_months", 0)))
     items.extend(validate_work_start_age(experiences, age))
     items.extend(validate_frequent_job_changes(experiences))
