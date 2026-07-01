@@ -15,11 +15,11 @@
 ```bash
 # 批量筛选某目录简历，用本目录里的 JD 作门槛
 python3 scripts/batch_screen_resumes.py path/to/resumes \
-  --jd knowledge/电话销售.txt --job-title 电话销售
+  --jd knowledge/外贸B2B销售.txt --job-title 电销
 
 # 单份解析同理
 python3 scripts/parse_resume.py path/to/resume.txt \
-  --jd knowledge/电话销售.txt --job-title 电话销售
+  --jd knowledge/外贸B2B销售.txt --job-title 电销
 ```
 
 ## 给 agent 的约定

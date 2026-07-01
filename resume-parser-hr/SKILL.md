@@ -56,10 +56,10 @@ python3 scripts/batch_screen_resumes.py path/to/resumes --jd path/to/jd.txt --jo
 - `--job-title <岗位>`：目标岗位（如 `电话销售`），决定与候选人经历算相关度的基准。
 - `--jd <JD文件路径或文本>`：这份 JD 会被解析出学历、技能关键词、最低经验年限等门槛。
 
-各岗位 JD 由 HR 维护在 skill 目录下的 `knowledge/` 里（每个岗位一个 `.txt`，文件名=岗位名；用法与约定见 `knowledge/README.md`，已附示例 `knowledge/电话销售.txt`）。**要筛某个岗位，就在运行时把对应 JD 文件路径传给 `--jd`**：
+各岗位 JD 由 HR 维护在 skill 目录下的 `knowledge/` 里（每个岗位一个 `.txt`，文件名=岗位名；用法与约定见 `knowledge/README.md`，已附示例 `knowledge/外贸B2B销售.txt`）。**要筛某个岗位，就在运行时把对应 JD 文件路径传给 `--jd`**：
 
 ```bash
-python3 scripts/batch_screen_resumes.py path/to/resumes --jd knowledge/电话销售.txt --job-title 电话销售
+python3 scripts/batch_screen_resumes.py path/to/resumes --jd knowledge/外贸B2B销售.txt --job-title 电销
 ```
 
 > **给 agent 的约定（JD 处理流程，务必照做，不要一上来就问“JD 是什么”）**：
