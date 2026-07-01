@@ -292,19 +292,30 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         exp for exp in experiences
         if exp.get("type") == "正式工作" and parse_date(exp.get("start_date")) and parse_date(exp.get("end_date"))
     ]
-    full_time.sort(key=lambda exp: parse_date(exp.get("start_date")))
+    intern_only = False
     if not full_time:
-        return {
-            "stability_score": 0.0,
-            "gap_score": 0.0,
-            "stability_label": "无正式工作",
-            "gap_label": "无正式工作",
-            "gap_summary": "无正式工作经历，暂无空窗分析。",
-            "gap_score_breakdown": "无正式工作经历，暂无空窗分析。",
-            "stability_metrics": {},
-            "gap_details": [],
-            "gap_metrics": {},
-        }
+        # 应届/实习为主：改用实习段做基准，不再判 0 分（worst）。
+        # 实习本就短，"长任职=稳定"的尺子不适用 → 稳定性给中性基准；Gap 仍按实习真实时间线算
+        # （连续实习/在校 → 无空窗 → Gap 高），避免把无缝衔接的应届生误判成"极不稳定"。
+        interns = [
+            exp for exp in experiences
+            if exp.get("type") == "实习" and parse_date(exp.get("start_date")) and parse_date(exp.get("end_date"))
+        ]
+        if not interns:
+            return {
+                "stability_score": 0.0,
+                "gap_score": 0.0,
+                "stability_label": "无可评估经历",
+                "gap_label": "无可评估经历",
+                "gap_summary": "无正式/实习经历，暂无稳定性与空窗分析。",
+                "gap_score_breakdown": "无正式/实习经历，暂无空窗分析。",
+                "stability_metrics": {},
+                "gap_details": [],
+                "gap_metrics": {},
+            }
+        full_time = interns
+        intern_only = True
+    full_time.sort(key=lambda exp: parse_date(exp.get("start_date")))
 
     durations = [max(0, exp.get("duration_months") or months_between(parse_date(exp.get("start_date")), parse_date(exp.get("end_date")))) for exp in full_time]
     avg_duration = sum(durations) / len(durations)
@@ -326,6 +337,9 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
         + 0.10 * (1 - severe_short_ratio)
         + 0.20 * consistency
     )
+    if intern_only:
+        # 应届/实习为主：稳定性无法用长任职尺子评估，给中性基准（62，"一般"偏上），既不判 worst 也不 inflate。
+        stability_score = max(stability_score, 62.0)
 
     now = datetime.now()
     five_years_ago = datetime(now.year - 5, now.month, 1)
@@ -380,7 +394,8 @@ def calculate_stability_scores(experiences: List[Dict]) -> Dict:
             f"{len(gap_details) - explained_count} 段无说明。"
         )
     else:
-        gap_summary = "正式工作之间无明显空窗（≥1 个月）。"
+        basis_word = "实习/在校经历" if intern_only else "正式工作"
+        gap_summary = f"{basis_word}之间无明显空窗（≥1 个月）。"
     # 最长空窗项加时间衰减：取各段空窗“衰减后罚分占比”的最大值，老空窗罚得轻。
     longest_penalty = max(longest_penalties) if longest_penalties else 0.0
     gap_score = 100 * (

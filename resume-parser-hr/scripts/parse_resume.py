@@ -289,7 +289,9 @@ def classify_experience(block: str, title: str) -> str:
         return "实习"
     if re.search(r"校园项目|课程项目|毕业设计|课程设计|学校项目|学术项目", text):
         return "校园项目"
-    if re.search(r"自由职业|freelance|创业|创始人|合伙人|个体", text):
+    # 仅在明确自雇语境下判自由职业/创业；避免"创业课程/创业赛道""合伙人律师"等把真实销售岗误伤（见王金麟）。
+    if re.search(r"自由职业|freelance|个体工商|个体户|自主创业|独立创业|自己创业|联合创始|创始人", text) \
+            and not re.search(r"创业(课程|赛道|项目|培训|辅导|营|大赛|孵化|公司客户)", text):
         return "自由职业/创业"
     if re.search(r"全职|正式|在职|有限公司|公司|集团|门店|中心|销售|客服|行政|招聘|运营", text):
         return "正式工作"
@@ -314,6 +316,33 @@ def _guess_title(lines: List[str]) -> Optional[str]:
         if match:
             return match.group(1).strip(" -|")
     return None
+
+
+# 简历里常把"公司｜岗位"写在日期上一行（本行内含 ｜/|），需据此抽岗位/公司，
+# 否则会退化成从职责行里抓关键词（如把"商务对接推广"抓成岗位"商务"）——正是王志阳/王金麟被判无经验的根因。
+_SECTION_HEADER_RE = re.compile(
+    r"^(工作经历|工作经验|教育经历|教育背景|学业资质|项目经历|实习经历|校园经历|自我评价|自我介绍|个人优势|个人评价|核心业绩|荣誉|技能|专业技能|资质认证|求职意向|基本信息)"
+)
+_HEADER_COMPANY_RE = re.compile(r"公司|集团|有限|科技|门店|中心|银行|保险|教育|咨询|贸易|地产|传媒|文化|软件|信息|网络|电商|工作室|事务所|医院|酒店")
+_HEADER_TITLE_RE = re.compile(r"销售|电销|面销|客服|业务员|商务|拓展|招商|渠道|主管|总监|顾问|专员|经理|助理|代表|工程师|实习生|BD|运营|市场|管理员|置业|理财|课程", re.I)
+
+
+def _split_header_line(line: str):
+    """把 '公司｜岗位' 或 '公司｜业务描述｜职位' 的表头行拆成 (company, title)；不像表头则 (None, None)。"""
+    if not line or _SECTION_HEADER_RE.match(line):
+        return None, None
+    parts = [p.strip(" -·、") for p in re.split(r"[｜|／/]", line) if p.strip(" -·、")]
+    if len(parts) < 2:  # 没有 ｜ 分隔的不当表头处理，交给 _guess_title 兜底
+        return None, None
+    company = next((p for p in parts if _HEADER_COMPANY_RE.search(p)), parts[0])
+    title = None
+    for p in reversed(parts):  # 职位常写在最后一段（如"公司｜B端销售｜销售经理"）
+        if p is company:
+            continue
+        if _HEADER_TITLE_RE.search(p):
+            title = p
+            break
+    return company, title
 
 
 def _education_window(education: Optional[List[Dict]]):
@@ -379,15 +408,21 @@ def extract_experiences(text: str, education: Optional[List[Dict]] = None) -> Li
         header_tail = lines[0][match.end() - match.start():].strip(" -|") if lines else ""
         content_lines = [header_tail] + lines[1:] if header_tail else lines[1:]
         content_lines = [line for line in content_lines if line]
-        title = _guess_title(content_lines) or ""
-        company = _guess_company(content_lines)
+        # 优先用日期上一行的"公司｜岗位"表头（若有）；否则退回从内容行猜岗位/公司。
+        pre_lines = [ln.strip() for ln in text[:block_start].splitlines() if ln.strip()]
+        header_line = pre_lines[-1] if pre_lines else ""
+        header_company, header_title = _split_header_line(header_line)
+        title = header_title or _guess_title(content_lines) or ""
+        company = header_company or _guess_company(content_lines)
+        # 分类文本带上表头，令"公司/岗位"信号可见（否则 BD经理 等会落到"待确认"）。
+        classify_block = f"{header_line}\n{block}" if (header_company or header_title) else block
         start_raw = match.group("start")
         end_raw = match.group("end")
         start = parse_date(start_raw)
         end = parse_date(end_raw)
         description = "\n".join(content_lines[1:]) if len(content_lines) > 1 else (content_lines[0] if content_lines else "")
         exp = {
-            "type": classify_experience(block, title),
+            "type": classify_experience(classify_block, title),
             "company": company,
             "job_title": title,
             "standardized_job_title": standardize_job_title(title),

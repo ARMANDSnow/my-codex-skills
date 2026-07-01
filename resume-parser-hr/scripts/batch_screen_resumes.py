@@ -236,12 +236,23 @@ def mismatch_items(candidate: Dict) -> List[str]:
 
 
 def short_comment(candidate: Dict, hits: List[str], mismatches: List[str]) -> str:
-    # 核心摘要：命中要点 + 首要风险；推荐等级/匹配分已各自成列，此处不再重复。
+    # 简要分析：相关经验年限 + 学历 + 命中要点 + 首要风险（推荐等级/匹配分已各自成列）。
     recommendation = candidate.get("recommendation", {})
-    hit_text = "、".join(hits[:3]) if hits else "命中点较少"
-    risk_text = "；风险：" + mismatches[0] if mismatches else ""
-    base = f"{hit_text}{risk_text}"[:46]
-    # 有 P0 时把具体内容加粗拼进摘要，确保只看摘要列也能看到（在 [:46] 截断后追加，保证 ** 配对）。
+    evidence = recommendation.get("details", {}).get("evidence", {})
+    parts: List[str] = []
+    rel = int(evidence.get("relevant_months", 0) or 0)
+    if rel > 0:
+        yrs, mos = divmod(rel, 12)
+        span = (f"{yrs}年" if yrs else "") + (f"{mos}个月" if mos and not yrs else "")
+        parts.append(f"{span}相关经验")
+    degree = highest_degree(candidate)
+    if degree and degree not in ("未解析", "未说明", "-"):
+        parts.append(degree)
+    parts.append("命中" + "、".join(hits[:3]) if hits else "命中点较少")
+    if mismatches:
+        parts.append("风险：" + mismatches[0])
+    base = "；".join(parts)[:70]
+    # 有 P0 时把具体内容加粗拼进摘要，确保只看摘要列也能看到（在截断后追加，保证 ** 配对）。
     p0_remark = recommendation.get("p0_remark", "")
     p0_text = f"；**⚠️P0：{p0_remark[:40]}**" if p0_remark else ""
     return base + p0_text
@@ -312,7 +323,7 @@ def sort_rows(rows: List[Dict]) -> List[Dict]:
     return ordered
 
 
-# Markdown 排序表（对齐截图版式，精简自解释）：排序 | 候选人 | 匹配分 | 推荐等级 | 学历 | 相关经验 | 核心摘要
+# Markdown 排序表（对齐截图版式，精简自解释）：排序 | 候选人 | 匹配分 | 推荐等级 | 学历 | 相关经验 | 简要分析
 TABLE_FIELDS = [
     "rank",
     "candidate",
@@ -350,7 +361,7 @@ FIELD_LABELS = {
     "mismatch_items": "不匹配项",
     "p0_remark": "P0高亮",
     "review_reasons": "人工复核原因",
-    "comment": "核心摘要",
+    "comment": "简要分析",
 }
 
 

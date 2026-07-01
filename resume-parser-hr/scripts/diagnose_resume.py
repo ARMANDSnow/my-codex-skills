@@ -43,13 +43,13 @@ EXPECTED_VERSION = "2.3"
 # 发布时生成的完整性清单（相对 skill 根目录）。任何不匹配 = 文件被改动/损坏/旧版。
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
-    "SKILL.md": "074337a2a45232cb166aa8af9a54dce943f2e052db12d0c0f7a86d51b9a1184a",
-    "scripts/parse_resume.py": "770ec42fa1f826ebf65d301027c6f72154a2a1c457cf251cbb631f823557e187",
+    "SKILL.md": "a97f4dd70ff47d639cb66b3ef86ba40fc027d0b98dc701de6ed029c407c0c874",
+    "scripts/parse_resume.py": "1ba8747b9bf8dafe1d72d2da687aae8d6d243de023ee1bbd4e50d712867e0ec4",
     "scripts/recommendation_engine.py": "732870f76f874e58b37f2f6630dca10fd235a2e987e7db0aaf2da40bec4eb763",
-    "scripts/validate_anomalies.py": "6a1dc8fa8e8a65931cc56adb0e55ac5e34b067e45bd6612cdd1fd8c1a433f49a",
+    "scripts/validate_anomalies.py": "f337ff4dbafdd6ea4ee4bc8e7ccff27b1c12b14c7172b124a485e1834889be79",
     "scripts/calculate_tenure.py": "6c7c74770b9376de9f045533864b522e854d3e8c2d09e8d7c4446519c1cd6a34",
     "scripts/standardize_job_title.py": "bc0a3f05320f9c26d7ee3e50ffcb713d1d31648bddcdca55535178433db19071",
-    "scripts/batch_screen_resumes.py": "14ef18a7c7d2e3995adec4913a4eca16912b838ed04e24418e214ecb977590b0",
+    "scripts/batch_screen_resumes.py": "1efa92c610218d3ad27deddf98c4dd4ef042ab514d5de70714dccaca19d50cfd",
 }
 
 # 已知良好的“多年销售、描述单薄”简历（即真实世界最易踩坑的形态）。
