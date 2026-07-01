@@ -444,7 +444,7 @@ def parse_resume_text(
         "experiences": extract_experiences(text, education=education),
         "source_text_length": len(text),
         "generation_time": datetime.now().isoformat(timespec="seconds"),
-        "version": "2.2",
+        "version": "2.3",
     }
     candidate["tenure_summary"] = calculate_tenure(candidate["experiences"])
     candidate["parsing_confidence"] = calculate_parsing_confidence(candidate)
@@ -474,7 +474,7 @@ def main() -> None:
         "--pass-threshold",
         type=float,
         default=None,
-        help="证据强度免复核通过阈值（0-100），默认 75，可用环境变量 HR_PASS_THRESHOLD 覆盖",
+        help="强推荐门槛（匹配分 0-100），默认 75；待审核=门槛-10、谨慎=门槛-20。可用环境变量 HR_PASS_THRESHOLD 覆盖",
     )
     args = parser.parse_args()
 

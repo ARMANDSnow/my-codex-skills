@@ -36,8 +36,13 @@ DEFAULT_WEIGHTS = {
     "stability_gap": 0.15,
     "parsing_confidence": 0.10,
 }
-# RESULT_ORDER = {"强推荐": 0, "待审核": 1, "暂不推荐": 2}  # 三档推荐等级已下线，保留以便回溯
-STATUS_ORDER = {"✅ 通过": 0, "✅⚠️": 1, "待筛选": 2}
+# 推荐等级次序（仅作同分时的次级排序键；主排序按匹配分降序）。
+STATUS_ORDER = {"强推荐": 0, "待审核": 1, "谨慎": 2, "不推荐": 3}
+
+
+def rank_badge(n: int) -> str:
+    """排序名次展示：前三名用奖牌，其余用数字。"""
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(n, str(n))
 
 
 def load_text_or_path(value: str) -> str:
@@ -189,7 +194,7 @@ def stability_gap_score(candidate: Dict) -> float:
     return max(0.0, min(1.0, (stability_score + gap_score) / 2))
 
 
-# 注：JD 加权匹配分已下线，批量表改用单一「证据强度综合评分」(recommendation.score_100)。
+# 注：旧 JD 加权分已下线，批量表改用单一「匹配分」(recommendation.score_100)。
 # 本函数及上方权重机制（DEFAULT_WEIGHTS / load_weights / --weights）保留以便回溯，当前不参与打分。
 def calculate_match_score(candidate: Dict, jd: Dict, job_title: str, weights: Dict[str, float]) -> float:
     min_months = jd.get("min_experience_months") or 6
@@ -231,37 +236,32 @@ def mismatch_items(candidate: Dict) -> List[str]:
 
 
 def short_comment(candidate: Dict, hits: List[str], mismatches: List[str]) -> str:
+    # 核心摘要：命中要点 + 首要风险；推荐等级/匹配分已各自成列，此处不再重复。
     recommendation = candidate.get("recommendation", {})
-    status = recommendation.get("status", "待筛选")
     hit_text = "、".join(hits[:3]) if hits else "命中点较少"
-    risk_text = "；" + mismatches[0] if mismatches else ""
-    base = f"{status}：{hit_text}{risk_text}"[:46]
-    # 有 P0 时把具体内容加粗拼进评语，确保只看评语列也能看到（在 [:46] 截断后追加，保证 ** 配对）。
+    risk_text = "；风险：" + mismatches[0] if mismatches else ""
+    base = f"{hit_text}{risk_text}"[:46]
+    # 有 P0 时把具体内容加粗拼进摘要，确保只看摘要列也能看到（在 [:46] 截断后追加，保证 ** 配对）。
     p0_remark = recommendation.get("p0_remark", "")
-    p0_text = f"；**P0：{p0_remark[:40]}**" if p0_remark else ""
+    p0_text = f"；**⚠️P0：{p0_remark[:40]}**" if p0_remark else ""
     return base + p0_text
 
 
 def row_from_candidate(path: Path, candidate: Dict, jd: Dict, job_title: str, weights: Dict[str, float]) -> Dict:
     recommendation = candidate.get("recommendation", {})
-    status = recommendation.get("status", "待筛选")
-    # 解析置信度过低时不应盲目免复核：即便分数达标也降为「待筛选」（独立于 P0 兜底逻辑）。
-    if candidate.get("parsing_confidence", 0) < 0.6 and status in {"✅ 通过", "✅⚠️"}:
-        recommendation = dict(recommendation)
-        status = "待筛选"
-        recommendation["status"] = status
-        recommendation["result"] = status
-        recommendation["reason"] = (recommendation.get("reason", "") + "；解析置信度低，需人工复核").strip("；")
-        candidate["recommendation"] = recommendation
-
+    # 解析置信度已并入匹配分（D4 维度），不再单独硬降级；等级由匹配分单调推导。
+    status = recommendation.get("status", "不推荐")
+    tier = recommendation.get("tier", status)
     hits = keyword_hits(candidate, jd)
     mismatches = mismatch_items(candidate)
     reasons = review_reasons(candidate)
     row = {
         "source_file": path.name,
         "candidate": candidate.get("basic_info", {}).get("name") or path.stem,
-        "status": status,
         "evidence_score": recommendation.get("score_100", 0),
+        "tier": tier,
+        "tier_display": recommendation.get("tier_display", tier),
+        "status": status,
         "recommendation_score": recommendation.get("score", 0),
         "parsing_confidence": candidate.get("parsing_confidence", 0),
         "education": highest_degree(candidate),
@@ -280,8 +280,10 @@ def unparsed_row(path: Path, reason: str) -> Dict:
     return {
         "source_file": path.name,
         "candidate": path.stem,
-        "status": "待筛选",
         "evidence_score": 0,
+        "tier": "不推荐",
+        "tier_display": "🔴 不推荐（未解析）",
+        "status": "不推荐",
         "recommendation_score": 0,
         "parsing_confidence": 0,
         "education": "未解析",
@@ -290,26 +292,42 @@ def unparsed_row(path: Path, reason: str) -> Dict:
         "mismatch_items": "-",
         "p0_remark": "",
         "review_reasons": reason,
-        "comment": "待筛选：文件未完成解析，需人工处理",
+        "comment": "文件未完成解析，需人工处理",
         "candidate_card": None,
     }
 
 
 def sort_rows(rows: List[Dict]) -> List[Dict]:
-    return sorted(
+    # 主排序：匹配分降序（等级已随匹配分单调，脱钩消失）；同分再按等级、旧内部分。
+    ordered = sorted(
         rows,
         key=lambda row: (
-            STATUS_ORDER.get(row.get("status"), 9),
             -float(row.get("evidence_score") or 0),
+            STATUS_ORDER.get(row.get("tier") or row.get("status"), 9),
             -float(row.get("recommendation_score") or 0),
         ),
     )
+    for idx, row in enumerate(ordered, 1):
+        row["rank"] = idx
+    return ordered
 
 
-DISPLAY_FIELDS = [
+# Markdown 排序表（对齐截图版式，精简自解释）：排序 | 候选人 | 匹配分 | 推荐等级 | 学历 | 相关经验 | 核心摘要
+TABLE_FIELDS = [
+    "rank",
     "candidate",
-    "status",
     "evidence_score",
+    "tier_display",
+    "education",
+    "relevant_experience_months",
+    "comment",
+]
+# CSV 导出保留更全的明细列，供需要深挖的 HR 使用。
+CSV_FIELDS = [
+    "rank",
+    "candidate",
+    "evidence_score",
+    "tier",
     "parsing_confidence",
     "education",
     "relevant_experience_months",
@@ -320,18 +338,26 @@ DISPLAY_FIELDS = [
     "comment",
 ]
 FIELD_LABELS = {
+    "rank": "排序",
     "candidate": "候选人",
-    "status": "状态",
-    "evidence_score": "综合评分",
+    "evidence_score": "匹配分",
+    "tier": "推荐等级",
+    "tier_display": "推荐等级",
     "parsing_confidence": "解析置信度",
     "education": "学历",
-    "relevant_experience_months": "相关经验月数",
+    "relevant_experience_months": "相关经验(月)",
     "keyword_hits": "命中关键词",
     "mismatch_items": "不匹配项",
     "p0_remark": "P0高亮",
     "review_reasons": "人工复核原因",
-    "comment": "评语",
+    "comment": "核心摘要",
 }
+
+
+def _cell(row: Dict, field: str) -> str:
+    if field == "rank":
+        return rank_badge(int(row.get("rank") or 0))
+    return str(row.get(field, "-")).replace("\n", " ").replace("|", "/")
 
 
 def markdown_table(rows: List[Dict], warnings: List[str]) -> str:
@@ -339,16 +365,11 @@ def markdown_table(rows: List[Dict], warnings: List[str]) -> str:
     if warnings:
         lines.append("\n".join(f"> 警告：{warning}" for warning in warnings))
         lines.append("")
-    header = [FIELD_LABELS[field] for field in DISPLAY_FIELDS]
+    header = [FIELD_LABELS[field] for field in TABLE_FIELDS]
     lines.append("| " + " | ".join(header) + " |")
     lines.append("| " + " | ".join("---" for _ in header) + " |")
     for row in rows:
-        values = []
-        for field in DISPLAY_FIELDS:
-            cell = str(row.get(field, "-")).replace("\n", " ").replace("|", "/")
-            if field == "p0_remark":
-                cell = f"**{cell}**" if cell and cell != "-" else "-"
-            values.append(cell)
+        values = [_cell(row, field) for field in TABLE_FIELDS]
         lines.append("| " + " | ".join(values) + " |")
     return "\n".join(lines)
 
@@ -366,10 +387,10 @@ def write_output(rows: List[Dict], output: str | None, warnings: List[str]) -> N
         return
     if suffix == ".csv":
         with path.open("w", newline="", encoding="utf-8-sig") as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=DISPLAY_FIELDS)
-            writer.writerow({field: FIELD_LABELS[field] for field in DISPLAY_FIELDS})
+            writer = csv.DictWriter(csvfile, fieldnames=CSV_FIELDS, extrasaction="ignore")
+            writer.writerow({field: FIELD_LABELS[field] for field in CSV_FIELDS})
             for row in rows:
-                writer.writerow({field: row.get(field, "") for field in DISPLAY_FIELDS})
+                writer.writerow({field: row.get(field, "") for field in CSV_FIELDS})
         return
     path.write_text(markdown_table(rows, warnings), encoding="utf-8")
 
@@ -425,7 +446,7 @@ def main() -> None:
         "--pass-threshold",
         type=float,
         default=None,
-        help="证据强度免复核通过阈值（0-100），默认 75，可用环境变量 HR_PASS_THRESHOLD 覆盖",
+        help="强推荐门槛（匹配分 0-100），默认 75；待审核=门槛-10、谨慎=门槛-20。可用环境变量 HR_PASS_THRESHOLD 覆盖",
     )
     parser.add_argument("--output", default="", help="Optional .md/.csv/.json output path")
     args = parser.parse_args()

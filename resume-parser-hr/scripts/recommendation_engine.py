@@ -158,6 +158,10 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
 
     required_level = _required_degree_level(jd)
     candidate_level = _candidate_degree_level(candidate)
+    # 学历维度（0-1）：无要求给满分，否则按候选人/要求比例给部分分（差一级不再一票压零）。
+    evidence["required_degree_level"] = required_level
+    evidence["candidate_degree_level"] = candidate_level
+    evidence["degree_ratio"] = 1.0 if required_level <= 0 else min(candidate_level / required_level, 1.0)
     if required_level > 0 and candidate_level < required_level:
         unmet.append(f"学历未达最低要求：要求{jd.get('min_degree')}，候选人最高学历不足")
 
@@ -178,7 +182,11 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
 
     sorted_exps = _sorted_experiences(candidate)
     last_exp = sorted_exps[-1] if sorted_exps else None
-    if last_exp and get_job_similarity(last_exp.get("standardized_job_title") or last_exp.get("job_title", ""), target) < 0.5:
+    last_similarity = get_job_similarity(
+        last_exp.get("standardized_job_title") or last_exp.get("job_title", ""), target
+    ) if last_exp else 0.0
+    evidence["last_similarity"] = last_similarity  # 最近一段相关度（0-1），喂经验维度
+    if last_exp and last_similarity < 0.5:
         unmet.append("最近一段经历与目标岗位不相关")
     elif not last_exp:
         unmet.append("缺少经历信息")
@@ -263,29 +271,30 @@ def calculate_recommendation_score(strong_met: bool, weak: List[str], downgrade:
     return round(max(0.0, min(1.0, score)), 2)
 
 
-# —— 0-100「证据强度综合评分」与「免复核通过」阈值 ——
-# 满分 100：BASE(强判据) + WEAK(弱判据) + RELEVANT(相关经验厚度) + STABILITY(稳定/Gap)
-#           - DOWNGRADE(降权) - ANOMALY(P1/P2) - P0_DAMPEN(P0 软抑制)
-EVIDENCE_BASE = 45.0          # 强判据满足的地基分（单独满足仍不足 75）
-WEAK_UNIT = 3.6              # 每项弱判据加分
-WEAK_CAP = 5                 # 弱判据当前最多 5 项 → 满档 18
-REL_MONTHS_FULL = 12.0      # 可信相关经验满 12 个月给满月数分
-REL_MONTHS_PTS = 12.0       # 月数桶满分
-REL_COUNT_UNIT = 4.0        # 每段高可信相关经历加分
-REL_COUNT_CAP = 2           # 高可信相关经历封顶 2 段 → 满档 8（月数+段数合计 20）
-STABILITY_W = 10.0          # 履历稳定分权重（吃 0-100 连续值）
-GAP_W = 7.0                 # Gap 分权重（吃 0-100 连续值）
-DOWNGRADE_UNIT = 6.0        # 每个降权因子扣分
-DOWNGRADE_CAP = 3           # 降权封顶 3 项 → -18
-P1_PENALTY = 8.0            # 每个 P1 异常扣分
-P2_PENALTY = 3.0            # 每个 P2 异常扣分
-P0_DAMPEN_UNIT = 6.0        # 每个 P0 软抑制（不硬拦截，由 status 标签兜底）
-P0_DAMPEN_CAP = 12.0        # P0 软抑制封顶，保证证据极强者仍可能 ≥ 阈值落入 ✅⚠️
-DEFAULT_PASS_THRESHOLD = 75.0
+# —— 0-100「匹配分」：四维平滑加权（经验/学历/稳定/置信度）− 软扣分（降权/P1/P2）——
+# 与旧「BASE 全有或全无」不同：缺一项判据只按比例扣分，不再直接归零，
+# 避免真实资深候选人（如描述单薄的多年销售）被压到低分。
+# P0 不进分数，只由 fit_tier 追加 ⚠️ 徽标（数据红旗，不改变分档）。
+DIM_EXPERIENCE_W = 40.0    # 经验匹配度：相关月数 + 最近一段相关度 + 高可信段数
+DIM_EDUCATION_W = 15.0     # 学历匹配：候选人学历 / JD 要求
+DIM_STABILITY_W = 25.0     # 履历稳定性：稳定分 + Gap 分
+DIM_CONFIDENCE_W = 20.0    # 置信度/证据质量：解析置信度 + 相关经历可信占比
+EXP_MONTHS_FULL = 30.0     # 相关经验满 30 个月即拿满「月数」分（平滑饱和）
+DOWNGRADE_PEN = 3.0        # 每个降权因子扣分
+DOWNGRADE_PEN_CAP = 9.0
+P1_PEN = 6.0               # 每个 P1 异常扣分
+P1_PEN_CAP = 18.0
+P2_PEN = 3.0               # 每个 P2 异常扣分
+P2_PEN_CAP = 9.0
+DEFAULT_PASS_THRESHOLD = 75.0   # 强推荐门槛（可 CLI / 环境变量覆盖）
+
+# 推荐等级：匹配分单调分档。待审核 = 门槛-10，谨慎 = 门槛-20，其余不推荐。
+TIER_STEP = 10.0
+TIER_DOTS = {"强推荐": "🟢", "待审核": "🟡", "谨慎": "🟠", "不推荐": "🔴"}
 
 
 def resolve_threshold(cli_value: Optional[float] = None) -> float:
-    """免复核通过阈值优先级：CLI 显式值 > 环境变量 HR_PASS_THRESHOLD > 默认 75。"""
+    """强推荐门槛优先级：CLI 显式值 > 环境变量 HR_PASS_THRESHOLD > 默认 75。"""
     if cli_value is not None:
         try:
             return float(cli_value)
@@ -301,57 +310,77 @@ def resolve_threshold(cli_value: Optional[float] = None) -> float:
 
 
 def calculate_evidence_score(
-    strong_met: bool,
-    weak: List[str],
-    downgrade: List[str],
     evidence: Dict,
     stability_scores: Dict,
     anomalies: List[Dict],
+    parsing_confidence: float,
+    downgrade: Optional[List[str]] = None,
 ) -> float:
-    """0-100 证据强度综合评分。复用推荐引擎已算好的信号，不新增抽取。
+    """0-100「匹配分」：四维平滑加权 − 软扣分。复用推荐引擎已算好的信号。
 
-    P0 仅软抑制分数（不硬拦截）——是否免复核交给 evidence_status 的状态标签。
-    与 calculate_recommendation_score 一致，仅对「参与评分」的异常计扣分。
+    四维（各归一到 0-1 后 × 权重，合计满分 100）：
+      D1 经验匹配度 = 相关月数(饱和) + 最近一段相关度 + 高可信段数；
+      D2 学历      = 候选人学历 / JD 要求（无要求给满分）；
+      D3 稳定性     = 稳定分×0.6 + Gap 分×0.4；
+      D4 置信度     = 解析置信度×0.75 + 相关经历可信占比×0.25。
+    软扣分：降权因子、P1/P2 异常（均封顶）。P0 不扣分（由 fit_tier 追加 ⚠️ 徽标）。
     """
+    downgrade = downgrade or []
     scoring_anomalies = [
         item for item in anomalies if "不参与评分" not in (item.get("action") or "")
     ]
-    p0_count = len([item for item in scoring_anomalies if item.get("level") == "P0"])
     p1_count = len([item for item in scoring_anomalies if item.get("level") == "P1"])
     p2_count = len([item for item in scoring_anomalies if item.get("level") == "P2"])
 
-    base = EVIDENCE_BASE if strong_met else 0.0
-    weak_pts = min(len(weak), WEAK_CAP) * WEAK_UNIT
-
-    # 月数桶吃「相关经验厚度」(relevant_months，含描述单薄但真实的长年限)；
-    # 高可信段数桶单独奖励证据质量。兼容旧 evidence 仅有 credible_relevant_months 的情况。
+    # —— D1 经验匹配度 ——（兼容旧 evidence 仅有 credible_relevant_months 的情况）
     relevant_months = evidence.get("relevant_months", evidence.get("credible_relevant_months", 0)) or 0
     high_credible_count = evidence.get("high_credible_relevant_count", 0) or 0
-    relevant_pts = (
-        min(relevant_months / REL_MONTHS_FULL, 1.0) * REL_MONTHS_PTS
-        + min(high_credible_count, REL_COUNT_CAP) * REL_COUNT_UNIT
-    )
+    last_similarity = min(max(float(evidence.get("last_similarity", 0.0) or 0.0), 0.0), 1.0)
+    months_ratio = min(relevant_months / EXP_MONTHS_FULL, 1.0)
+    quality_ratio = min(high_credible_count / 2.0, 1.0)
+    experience = 0.55 * months_ratio + 0.25 * last_similarity + 0.20 * quality_ratio
+    d_experience = DIM_EXPERIENCE_W * experience
 
-    stability_score = float(stability_scores.get("stability_score") or 0)
-    gap_score = float(stability_scores.get("gap_score") or 0)
-    stability_pts = (stability_score / 100) * STABILITY_W + (gap_score / 100) * GAP_W
+    # —— D2 学历匹配 ——
+    degree_ratio = min(max(float(evidence.get("degree_ratio", 1.0) or 0.0), 0.0), 1.0)
+    d_education = DIM_EDUCATION_W * degree_ratio
 
-    downgrade_penalty = min(len(downgrade), DOWNGRADE_CAP) * DOWNGRADE_UNIT
-    anomaly_penalty = p1_count * P1_PENALTY + p2_count * P2_PENALTY
-    p0_dampen = min(min(p0_count, 2) * P0_DAMPEN_UNIT, P0_DAMPEN_CAP)
+    # —— D3 履历稳定性 ——
+    stability_score = float(stability_scores.get("stability_score") or 0) / 100.0
+    gap_score = float(stability_scores.get("gap_score") or 0) / 100.0
+    d_stability = DIM_STABILITY_W * (0.6 * stability_score + 0.4 * gap_score)
 
-    score = (
-        base + weak_pts + relevant_pts + stability_pts
-        - downgrade_penalty - anomaly_penalty - p0_dampen
-    )
+    # —— D4 置信度 / 证据质量 ——
+    conf = min(max(float(parsing_confidence or 0.0), 0.0), 1.0)
+    credible_months = evidence.get("credible_relevant_months", 0) or 0
+    credible_ratio = min(credible_months / relevant_months, 1.0) if relevant_months else 0.5
+    d_confidence = DIM_CONFIDENCE_W * (0.75 * conf + 0.25 * credible_ratio)
+
+    raw = d_experience + d_education + d_stability + d_confidence
+
+    downgrade_penalty = min(len(downgrade) * DOWNGRADE_PEN, DOWNGRADE_PEN_CAP)
+    anomaly_penalty = min(p1_count * P1_PEN, P1_PEN_CAP) + min(p2_count * P2_PEN, P2_PEN_CAP)
+
+    score = raw - downgrade_penalty - anomaly_penalty
     return round(max(0.0, min(100.0, score)), 1)
 
 
-def evidence_status(score_100: float, threshold: float, p0_items: List[Dict]) -> str:
-    """证据分 → 状态标签：✅ 通过 / ✅⚠️（达标但有 P0）/ 待筛选。"""
+def fit_tier(score_100: float, threshold: float, p0_items: Optional[List[Dict]] = None) -> Tuple[str, str, str]:
+    """匹配分 → 推荐等级（单调）：强推荐 / 待审核 / 谨慎 / 不推荐。
+
+    返回 (等级, 色点, 徽标)。存在 P0 时徽标为 ⚠️（数据红旗），不改变分档——
+    同一匹配分永远对应同一等级，彻底消除「高分低等级」脱钩。
+    """
     if score_100 >= threshold:
-        return "✅⚠️" if p0_items else "✅ 通过"
-    return "待筛选"
+        tier = "强推荐"
+    elif score_100 >= threshold - TIER_STEP:
+        tier = "待审核"
+    elif score_100 >= threshold - 2 * TIER_STEP:
+        tier = "谨慎"
+    else:
+        tier = "不推荐"
+    badge = "⚠️" if p0_items else ""
+    return tier, TIER_DOTS[tier], badge
 
 
 def recommend(
@@ -373,30 +402,20 @@ def recommend(
     p0 = [item for item in scoring_anomalies if item.get("level") == "P0"]
 
     threshold = resolve_threshold(pass_threshold)
-    # BASE 只看实质性强判据（学历/经验/相关性/稳定性/销售证据），把「异常门」剥离：
-    # P0 改为软抑制 + ✅⚠️ 标签，P1 数量改为扣分——否则带 P0 者 BASE 归零、永远到不了阈值，
-    # ✅⚠️ 兜底态形同虚设。
-    core_unmet = [u for u in unmet if "P0异常" not in u and "P1异常超过" not in u]
-    strong_core_met = len(core_unmet) == 0
+    parsing_confidence = candidate.get("parsing_confidence", 0.75)
+    # 匹配分为唯一底层分数：四维平滑加权（经验/学历/稳定/置信度）− 降权/P1/P2 软扣分。
+    # 不再用「强判据全有或全无」把分数归零；解析置信度已并入 D4，低置信度自然拉低分数。
     score_100 = calculate_evidence_score(
-        strong_core_met, weak, downgrade, evidence,
-        candidate.get("stability_scores", {}), anomalies,
+        evidence, candidate.get("stability_scores", {}), anomalies,
+        parsing_confidence, downgrade,
     )
-    status = evidence_status(score_100, threshold, p0)
+    # 推荐等级由匹配分单调推导；P0 只追加 ⚠️ 徽标（红旗），不改变分档、不再单独降级。
+    tier, tier_dot, tier_badge = fit_tier(score_100, threshold, p0)
+    status = tier                     # status 保持干净等级名（供排序/兼容），徽标单列
+    tier_display = f"{tier_dot} {tier}" + (f" {tier_badge}" if tier_badge else "")
     p0_remark = "；".join(
         f"{item.get('type')}：{item.get('description')}" for item in p0
     )
-
-    # —— 三档推荐等级（强推荐/待审核/暂不推荐）已下线，改用证据分 + status 标签。
-    #    保留以下逻辑以便回溯，如需恢复取消注释即可。 ——
-    # if strong_met and score >= 0.7 and not p0:
-    #     result = "强推荐"
-    # elif score >= 0.35 or p0 or unmet:
-    #     result = "待审核"
-    # else:
-    #     result = "暂不推荐"
-    # if any("低可信相关经历" in item for item in downgrade) and result == "强推荐":
-    #     result = "待审核"
 
     reason_parts = []
     rel_m = int(evidence.get("relevant_months", 0) or 0)
@@ -413,14 +432,17 @@ def recommend(
     if downgrade:
         reason_parts.append("风险：" + "、".join(downgrade[:4]))
     if p0:
-        reason_parts.append(f"存在{len(p0)}个P0异常，已在状态高亮，建议关注")
+        reason_parts.append(f"存在{len(p0)}个P0异常（⚠️ 数据红旗），建议关注")
 
-    parsing_confidence = candidate.get("parsing_confidence", 0.75)
     confidence = round(max(0.0, min(1.0, parsing_confidence * 0.65 + score * 0.35)), 2)
     return {
-        "result": status,            # 兼容旧键：置为 status，供下游排序/读取
-        "status": status,            # ✅ 通过 / ✅⚠️ / 待筛选
-        "score_100": score_100,      # 0-100 统一证据强度综合评分
+        "result": status,            # 兼容旧键：置为 tier（推荐等级），供下游排序/读取
+        "status": status,            # 推荐等级：强推荐 / 待审核 / 谨慎 / 不推荐
+        "tier": tier,                # 同 status，语义更明确
+        "tier_dot": tier_dot,        # 色点 🟢🟡🟠🔴
+        "tier_badge": tier_badge,    # 有 P0 时为 ⚠️，否则空
+        "tier_display": tier_display,  # 直接展示用：色点 + 等级(+ ⚠️)
+        "score_100": score_100,      # 0-100 统一「匹配分」（唯一底层分数）
         "pass_threshold": threshold,
         "p0_items": [
             {"type": item.get("type"), "description": item.get("description")}

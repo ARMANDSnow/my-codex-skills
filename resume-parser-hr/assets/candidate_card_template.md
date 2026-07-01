@@ -12,12 +12,12 @@
 - 语言：<basic_info.languages>（未提及为“未说明”）
 
 ## HR 快筛结论
-> 状态含义：`✅ 通过` = 证据分达到免复核阈值，可直接通过、无需复核（HR 自愿承担风险）；
-> `✅⚠️` = 分数达标但存在 P0 异常，仍算通过但务必看 P0 高亮；`待筛选` = 未达阈值，需人工筛选。
-- 状态：<recommendation.status>
+> 推荐等级由匹配分单调推导，二者永远一致：`🟢 强推荐` ≥ 门槛（默认 75）；`🟡 待审核` 门槛-10 起（默认 65–75）；
+> `🟠 谨慎` 门槛-20 起；`🔴 不推荐` 更低。存在 P0 数据红旗时等级后带 `⚠️`，只提示不改变分档。
+- 匹配分：<recommendation.score_100> / 100
+- 推荐等级：<recommendation.tier_display>（强推荐门槛 <recommendation.pass_threshold>）
 - 目标岗位：<recommendation.target_job_title>
-- 综合评分：<recommendation.score_100> / 100（免复核阈值 <recommendation.pass_threshold>）
-- P0 高亮（仅 ✅⚠️ 时有内容，请加粗呈现）：**<recommendation.p0_remark>**
+- P0 高亮（有 ⚠️ 徽标时非空，请加粗呈现）：**<recommendation.p0_remark>**
 - 推荐理由：<recommendation.reason>
 - 置信度：<recommendation.confidence>
 
@@ -82,8 +82,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 候选人 | <basic_info.name> |
-| 状态 | <recommendation.status> |
-| 综合评分 | <recommendation.score_100> / 100（阈值 <recommendation.pass_threshold>） |
+| 匹配分 | <recommendation.score_100> / 100 |
+| 推荐等级 | <recommendation.tier_display>（门槛 <recommendation.pass_threshold>） |
 | P0 高亮 | **<recommendation.p0_remark>**（无则写“无”） |
 | 正式工龄 | <tenure_summary.full_time_years> 年 |
 | 履历稳定分 | <stability_scores.stability_score>（<stability_scores.stability_label>） |
