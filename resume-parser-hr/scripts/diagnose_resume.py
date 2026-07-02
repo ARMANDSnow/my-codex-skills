@@ -38,13 +38,13 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-EXPECTED_VERSION = "2.3"
+EXPECTED_VERSION = "2.4"
 
 # 发布时生成的完整性清单（相对 skill 根目录）。任何不匹配 = 文件被改动/损坏/旧版。
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
-    "SKILL.md": "5477236543f1b26058d29bc139e3b6859fcca2681cd4383ed139d4c8562d45d6",
-    "scripts/parse_resume.py": "1ba8747b9bf8dafe1d72d2da687aae8d6d243de023ee1bbd4e50d712867e0ec4",
+    "SKILL.md": "673b6664499fbc1304835716b1bbc2b8c7d3a5e0f31ed356a8ab7ed0cb4f4691",
+    "scripts/parse_resume.py": "819ac85a1211e8321bf00ffb67671eb63731dca77775a3fc127192b618c1ce4a",
     "scripts/recommendation_engine.py": "732870f76f874e58b37f2f6630dca10fd235a2e987e7db0aaf2da40bec4eb763",
     "scripts/validate_anomalies.py": "76298c20a992e19970c3f750ea4c052be840b8a93ff8a9a9210c7a684a8e17fe",
     "scripts/calculate_tenure.py": "6c7c74770b9376de9f045533864b522e854d3e8c2d09e8d7c4446519c1cd6a34",
@@ -62,6 +62,31 @@ KNOWN_GOOD_RESUME = """姓名：测试候选人
 2012.07-2017.06  A公司  销售代表
 2017.07-2023.12  B公司  销售经理
 """
+
+# 版式回归：BOSS 直聘等无 ｜ 分隔的表头，真实岗位在正文里不出现“销售”二字，
+# 不得因表头解析回退而漏判销售经验（对应 L2/L3，见 references/troubleshooting.md）。
+LAYOUT_RESUMES = {
+    "L2 公司/岗位/日期同一行(空格分隔)": """姓名：版式测试L2
+电话：13600136001
+学历：本科  测试大学  2014.09-2018.06
+
+工作经历
+测试网络技术有限公司  客户经理  2022.07-2025.07
+内容：
+1.客户开发与维护：对接入驻平台未合作企业HR及高管，挖掘招聘服务需求，提供年度招聘产品解决方案；
+2.客户服务与续约：解决客户产品使用问题，推动续约指标达成。
+""",
+    "L3 岗位写在日期下一行": """姓名：版式测试L3
+电话：13600136002
+学历：本科  测试大学  2016.09-2020.06
+
+工作经历
+测试电子科技有限公司  2022/05-2023/05
+海外业务员
+上海
+深入钻研全球电子产品行业，精准锁定核心目标客户，运用电话营销、定制邮件推广、实地拜访等渠道，与海外大客户建立业务合作。
+""",
+}
 
 OK, BAD, WARN = "✅", "❌", "⚠️"
 
@@ -192,6 +217,30 @@ def check_known_good_regression() -> bool:
     return bool(ok)
 
 
+def check_layout_regression() -> bool:
+    print("—— C2. 版式回归（BOSS 无 ｜ 表头：公司/岗位/日期同行 或 岗位在日期下一行）——")
+    try:
+        from parse_resume import parse_resume_text
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {BAD} 无法导入 parse_resume：{exc}")
+        return False
+    bad_phrases = ["无销售经验", "无经验", "当前0个月", "缺少经历信息"]
+    all_ok = True
+    for name, resume in LAYOUT_RESUMES.items():
+        card = parse_resume_text(resume, jd_text="招聘销售/客户经理，2年以上销售或客户相关经验", job_title="销售")
+        rec = card.get("recommendation", {})
+        ev = rec.get("details", {}).get("evidence", {})
+        months = ev.get("relevant_months", 0)
+        reason = rec.get("reason", "")
+        hit_bad = [p for p in bad_phrases if p in reason]
+        ok = bool(months and months > 0 and not hit_bad)
+        all_ok = all_ok and ok
+        print(f"  {OK if ok else BAD} {name}：relevant_months={months}")
+        if not ok:
+            print(f"     {BAD} 该版式的真实岗位未被识别为销售 → 表头解析回退（旧版/未修复）。")
+    return all_ok
+
+
 def diagnose_resume(resume_path: str, jd: str, job_title: str) -> None:
     print("—— D. 单份简历诊断 ——")
     from parse_resume import extract_text, parse_resume_text
@@ -269,6 +318,8 @@ def main() -> int:
     print()
     c = check_known_good_regression()
     print()
+    c2 = check_layout_regression()
+    print()
 
     if args.resume:
         try:
@@ -278,7 +329,7 @@ def main() -> int:
             return 2
         print()
 
-    verdict_ok = a and b and c
+    verdict_ok = a and b and c and c2
     print("—— 结论 ——")
     if verdict_ok:
         print(f"{OK} 版本为最新（{EXPECTED_VERSION}）、文件完整、引擎正常。若仍有简历打分异常，请用 D 段诊断该简历并把输出发回。")

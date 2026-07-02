@@ -307,7 +307,7 @@ def _guess_company(lines: List[str]) -> Optional[str]:
 
 
 def _guess_title(lines: List[str]) -> Optional[str]:
-    explicit_titles = ["电话销售", "电销", "销售顾问", "销售代表", "销售主管", "区域销售经理", "区域经理", "客户经理", "大客户经理", "大客户销售", "客户拓展", "渠道销售", "招商经理", "置业顾问", "理财顾问", "课程顾问", "会籍顾问", "客服专员", "行政专员", "招聘专员", "运营专员", "商务拓展", "BD"]
+    explicit_titles = ["电话销售", "电销", "销售顾问", "销售代表", "销售主管", "区域销售经理", "区域经理", "客户经理", "大客户经理", "大客户销售", "客户拓展", "渠道销售", "招商经理", "置业顾问", "理财顾问", "课程顾问", "会籍顾问", "海外业务员", "业务员", "业务代表", "客服专员", "行政专员", "招聘专员", "运营专员", "商务拓展", "BD"]
     for line in lines[:6]:
         for title in explicit_titles:
             if re.search(title, line, re.I):
@@ -328,11 +328,24 @@ _HEADER_TITLE_RE = re.compile(r"销售|电销|面销|客服|业务员|商务|拓
 
 
 def _split_header_line(line: str):
-    """把 '公司｜岗位' 或 '公司｜业务描述｜职位' 的表头行拆成 (company, title)；不像表头则 (None, None)。"""
+    """把 '公司｜岗位' 或 '公司｜业务描述｜职位' 的表头行拆成 (company, title)；不像表头则 (None, None)。
+
+    兼容 BOSS 直聘等无 ｜ 分隔的版式：
+    - '公司 岗位'（空格分隔、同一行；normalize 后为单空格）→ 退化按空白切分；
+    - '公司'（岗位写在日期下一行，本行只剩公司名）→ 单 token 时作为公司返回。
+    """
     if not line or _SECTION_HEADER_RE.match(line):
         return None, None
     parts = [p.strip(" -·、") for p in re.split(r"[｜|／/]", line) if p.strip(" -·、")]
-    if len(parts) < 2:  # 没有 ｜ 分隔的不当表头处理，交给 _guess_title 兜底
+    if len(parts) < 2 and not DATE_RANGE_RE.search(line):
+        # 无 ｜ 分隔：退化按空白切分。行内含日期 → 是上一段 date-first 经历行，不作表头
+        # （避免把"日期 公司 岗位"整行误当成当前段表头，破坏 date-first 版式）。
+        parts = [p for p in re.split(r"\s+", line.strip()) if p]
+    if len(parts) < 2:
+        # 单 token 且像公司（含公司词、不含岗位词、无日期）→ 作公司返回（岗位常在日期下一行，靠 _guess_title 兜底）。
+        if (len(parts) == 1 and not DATE_RANGE_RE.search(parts[0])
+                and _HEADER_COMPANY_RE.search(parts[0]) and not _HEADER_TITLE_RE.search(parts[0])):
+            return parts[0], None
         return None, None
     company = next((p for p in parts if _HEADER_COMPANY_RE.search(p)), parts[0])
     title = None
@@ -408,9 +421,12 @@ def extract_experiences(text: str, education: Optional[List[Dict]] = None) -> Li
         header_tail = lines[0][match.end() - match.start():].strip(" -|") if lines else ""
         content_lines = [header_tail] + lines[1:] if header_tail else lines[1:]
         content_lines = [line for line in content_lines if line]
-        # 优先用日期上一行的"公司｜岗位"表头（若有）；否则退回从内容行猜岗位/公司。
+        # 表头来源分两种版式：
+        # - date-last（header_tail 为空 = 日期在行尾）：公司/岗位在日期上一行 → 读 pre_lines[-1]；
+        # - date-first（header_tail 非空 = 日期后同行还有"公司 岗位"）：上一行是别段内容，
+        #   不作本段表头（否则空白退化分支会把别段描述行误当表头、取错公司名），表头信息走 header_tail。
         pre_lines = [ln.strip() for ln in text[:block_start].splitlines() if ln.strip()]
-        header_line = pre_lines[-1] if pre_lines else ""
+        header_line = "" if header_tail else (pre_lines[-1] if pre_lines else "")
         header_company, header_title = _split_header_line(header_line)
         title = header_title or _guess_title(content_lines) or ""
         company = header_company or _guess_company(content_lines)
@@ -479,7 +495,7 @@ def parse_resume_text(
         "experiences": extract_experiences(text, education=education),
         "source_text_length": len(text),
         "generation_time": datetime.now().isoformat(timespec="seconds"),
-        "version": "2.3",
+        "version": "2.4",
     }
     candidate["tenure_summary"] = calculate_tenure(candidate["experiences"])
     candidate["parsing_confidence"] = calculate_parsing_confidence(candidate)
