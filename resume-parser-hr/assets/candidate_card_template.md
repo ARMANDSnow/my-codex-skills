@@ -12,10 +12,12 @@
 - 语言：<basic_info.languages>（未提及为“未说明”）
 
 ## HR 快筛结论
-> 推荐等级由匹配分单调推导，二者永远一致：`🟢 强推荐` ≥ 门槛（默认 75）；`🟡 待审核` 门槛-10 起（默认 65–75）；
-> `🟠 谨慎` 门槛-20 起；`🔴 不推荐` 更低。存在 P0 数据红旗时等级后带 `⚠️`，只提示不改变分档。
+> 推荐等级（3 档固定分带）：`🟢 强推荐` 匹配分 ≥ 60；`🟡 待审核` 40–60；`🔴 淘汰` < 40。
+> 另有两条硬规则命中即锁 `🟡 待审核`（有销售经验+高中学历、应届+语言优势），原因见 `tier_override`，请加粗呈现。
+> 存在 P0 数据红旗时等级后带 `⚠️`，只提示不改变分档。
 - 匹配分：<recommendation.score_100> / 100
-- 推荐等级：<recommendation.tier_display>（强推荐门槛 <recommendation.pass_threshold>）
+- 推荐等级：<recommendation.tier_display>（强推荐门槛 <recommendation.pass_threshold>、待审核下限 <recommendation.review_threshold>）
+- 锁定待审核原因（`tier_override` 非空时加粗呈现）：**<recommendation.tier_override>**
 - 目标岗位：<recommendation.target_job_title>
 - P0 高亮（有 ⚠️ 徽标时非空，请加粗呈现）：**<recommendation.p0_remark>**
 - 推荐理由：<recommendation.reason>
@@ -83,7 +85,8 @@
 | --- | --- |
 | 候选人 | <basic_info.name> |
 | 匹配分 | <recommendation.score_100> / 100 |
-| 推荐等级 | <recommendation.tier_display>（门槛 <recommendation.pass_threshold>） |
+| 推荐等级 | <recommendation.tier_display>（强推荐门槛 <recommendation.pass_threshold>、待审核下限 <recommendation.review_threshold>） |
+| 锁定待审核 | **<recommendation.tier_override>**（无则写“无”） |
 | P0 高亮 | **<recommendation.p0_remark>**（无则写“无”） |
 | 正式工龄 | <tenure_summary.full_time_years> 年 |
 | 履历稳定分 | <stability_scores.stability_score>（<stability_scores.stability_label>） |

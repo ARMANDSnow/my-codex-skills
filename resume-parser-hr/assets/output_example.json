@@ -99,8 +99,10 @@
     "tier_dot": "🟢",
     "tier_badge": "",
     "tier_display": "🟢 强推荐",
+    "tier_override": "",
     "score_100": 93.1,
-    "pass_threshold": 75.0,
+    "pass_threshold": 60.0,
+    "review_threshold": 40.0,
     "p0_items": [],
     "p0_remark": "",
     "reason": "相关销售经历约4年2个月；满足强判据；优势：有客户沟通经验、简历表达和字段完整度较好、稳定性尚可、有销售或业务结果指标",
@@ -136,6 +138,7 @@
   "parsing_confidence": 1.0,
   "field_completeness": 100.0,
   "low_credibility_ratio": 0.0,
+  "is_fresh_graduate": false,
   "resume_recency": {
     "latest_year_in_text": 2026,
     "years_since_latest": 0,
@@ -144,5 +147,5 @@
     "stale_threshold_years": 2
   },
   "generation_time": "2026-04-22T12:00:00",
-  "version": "2.3"
+  "version": "2.5"
 }

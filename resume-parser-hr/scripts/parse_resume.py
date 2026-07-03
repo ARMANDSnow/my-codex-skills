@@ -13,12 +13,12 @@ from typing import Dict, List, Optional
 
 try:
     from .calculate_tenure import calculate_tenure, detect_overlaps, months_between, parse_date
-    from .recommendation_engine import recommend, resolve_threshold
+    from .recommendation_engine import recommend, resolve_review_threshold, resolve_threshold
     from .standardize_job_title import standardize_job_title
     from .validate_anomalies import calculate_experience_credibility, run_all_validations
 except ImportError:
     from calculate_tenure import calculate_tenure, detect_overlaps, months_between, parse_date
-    from recommendation_engine import recommend, resolve_threshold
+    from recommendation_engine import recommend, resolve_review_threshold, resolve_threshold
     from standardize_job_title import standardize_job_title
     from validate_anomalies import calculate_experience_credibility, run_all_validations
 
@@ -47,7 +47,7 @@ _LANGUAGE_BASE = [
 _LANGUAGE_CERTS = {
     "英语": [r"CET-?6", r"CET-?4", r"六级", r"四级", r"雅思\s*[\d.]*", r"IELTS\s*[\d.]*",
              r"托福\s*\d*", r"TOEFL\s*\d*", r"专八", r"TEM-?8", r"专四", r"TEM-?4", r"BEC"],
-    "日语": [r"JLPT", r"N[1-5]\b"],
+    "日语": [r"JLPT", r"N[1-5](?![-\d])"],  # N 级后不接连字符/数字，排除 "N1-2000房间" 等编号误判
     "韩语": [r"TOPIK\s*\d*"],
 }
 # 仅匹配独立的四位年份（避免命中手机号/工号里的数字片段）。
@@ -241,7 +241,7 @@ def extract_education(text: str) -> List[Dict]:
         degree = "硕士"
 
     major_match = re.search(r"专业[:：]\s*([一-龥A-Za-z]{2,30})", scope) \
-        or re.search(r"([一-龥A-Za-z]{2,20})专业", scope)
+        or re.search(r"([一-龥A-Za-z]{2,20})(?:（[^）]*）)?专业", scope)  # 允许「阿拉伯语（辅修）专业」等括号修饰
 
     # 解析教育起止年月，供应届生“在校期间”判定使用（见 extract_experiences）。
     edu_start = edu_end = None
@@ -481,11 +481,41 @@ def calculate_parsing_confidence(candidate: Dict) -> float:
     return round(completeness * 0.6 + (1 - low_ratio) * 0.4, 2)
 
 
+# 应届生显式信号词。命中即判应届（另有「无正式工作 + 近期毕业」的启发式兜底）。
+FRESH_GRAD_RE = re.compile(r"应届|应届毕业生|应届生|即将毕业|待毕业|尚未毕业", re.I)
+
+
+def detect_fresh_graduate(text: str, candidate: Dict) -> bool:
+    """判断是否应届生：无正式工作 且（显式「应届」关键词 或 毕业时间在近 15 个月内/未来 18 个月内）。
+
+    供 recommendation_engine 的「应届生 + 语言优势 → 锁定待审核」规则使用（需求 4）。
+    在校期间的兼职/实习已在 extract_experiences 降级为「实习」，故无正式工作 = 尚未真正就业。
+    先判「有正式工作即非应届」（B3）：正文里的「应届」多来自校招/带教/求职意向语境，
+    资深候选人不能因简历出现「负责应届校招」等字样被误判成应届。
+    """
+    full_time_months = candidate.get("tenure_summary", {}).get("full_time_months", 0) or 0
+    if full_time_months > 0:
+        return False
+    if FRESH_GRAD_RE.search(text or ""):
+        return True
+    now = datetime.now()
+    for edu in candidate.get("education", []) or []:
+        end = parse_date(edu.get("end_date"))
+        if not end:
+            continue
+        months_to_grad = (end.year - now.year) * 12 + (end.month - now.month)
+        # 近 15 个月内已毕业（-15 ≤ x ≤ 0）或未来 18 个月内即将毕业（0 < x ≤ 18）→ 视为应届。
+        if -15 <= months_to_grad <= 18:
+            return True
+    return False
+
+
 def parse_resume_text(
     text: str,
     jd_text: Optional[str] = None,
     job_title: Optional[str] = None,
     pass_threshold: Optional[float] = None,
+    review_threshold: Optional[float] = None,
 ) -> Dict:
     text = normalize_text(text)
     education = extract_education(text)
@@ -495,14 +525,19 @@ def parse_resume_text(
         "experiences": extract_experiences(text, education=education),
         "source_text_length": len(text),
         "generation_time": datetime.now().isoformat(timespec="seconds"),
-        "version": "2.4",
+        "version": "2.5",
     }
     candidate["tenure_summary"] = calculate_tenure(candidate["experiences"])
     candidate["parsing_confidence"] = calculate_parsing_confidence(candidate)
     candidate["resume_recency"] = detect_resume_recency(text)
     run_all_validations(candidate)
+    # 应届生标记需在 tenure_summary 就绪后计算（依赖 full_time_months），供锁定待审核规则读取。
+    candidate["is_fresh_graduate"] = detect_fresh_graduate(text, candidate)
     if jd_text or job_title:
-        candidate["recommendation"] = recommend(candidate, jd_text, job_title, pass_threshold=pass_threshold)
+        candidate["recommendation"] = recommend(
+            candidate, jd_text, job_title,
+            pass_threshold=pass_threshold, review_threshold=review_threshold,
+        )
     return candidate
 
 
@@ -525,7 +560,13 @@ def main() -> None:
         "--pass-threshold",
         type=float,
         default=None,
-        help="强推荐门槛（匹配分 0-100），默认 75；待审核=门槛-10、谨慎=门槛-20。可用环境变量 HR_PASS_THRESHOLD 覆盖",
+        help="强推荐门槛（匹配分 0-100），默认 60；≥门槛=强推荐。可用环境变量 HR_PASS_THRESHOLD 覆盖",
+    )
+    parser.add_argument(
+        "--review-threshold",
+        type=float,
+        default=None,
+        help="待审核下限（匹配分 0-100），默认 40；≥此且<强推荐门槛=待审核，低于此=淘汰。可用环境变量 HR_REVIEW_THRESHOLD 覆盖",
     )
     args = parser.parse_args()
 
@@ -534,8 +575,10 @@ def main() -> None:
         jd_text = Path(jd_text).read_text(encoding="utf-8", errors="ignore")
 
     threshold = resolve_threshold(args.pass_threshold)
+    review_threshold = resolve_review_threshold(args.review_threshold)
     card = parse_resume_text(
-        extract_text(args.resume), jd_text=jd_text, job_title=args.job_title, pass_threshold=threshold
+        extract_text(args.resume), jd_text=jd_text, job_title=args.job_title,
+        pass_threshold=threshold, review_threshold=review_threshold,
     )
     print(json.dumps(card, ensure_ascii=False, indent=2))
 

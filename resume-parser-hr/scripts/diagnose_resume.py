@@ -38,18 +38,18 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-EXPECTED_VERSION = "2.4"
+EXPECTED_VERSION = "2.5"
 
 # 发布时生成的完整性清单（相对 skill 根目录）。任何不匹配 = 文件被改动/损坏/旧版。
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
-    "SKILL.md": "673b6664499fbc1304835716b1bbc2b8c7d3a5e0f31ed356a8ab7ed0cb4f4691",
-    "scripts/parse_resume.py": "819ac85a1211e8321bf00ffb67671eb63731dca77775a3fc127192b618c1ce4a",
-    "scripts/recommendation_engine.py": "732870f76f874e58b37f2f6630dca10fd235a2e987e7db0aaf2da40bec4eb763",
+    "SKILL.md": "77bd9740098558e189afca95ff81997b0e1c90f003904afbb0cb0445ce00dab6",
+    "scripts/parse_resume.py": "78795c24fdcfe5c3a4d9974cdc6f2b41056a23aaa65cad911187872566da52b1",
+    "scripts/recommendation_engine.py": "bdb9d5f0debbc9df7e40430ff217031820b3edeb00324d3ee9e668e9cda9b31f",
     "scripts/validate_anomalies.py": "76298c20a992e19970c3f750ea4c052be840b8a93ff8a9a9210c7a684a8e17fe",
     "scripts/calculate_tenure.py": "6c7c74770b9376de9f045533864b522e854d3e8c2d09e8d7c4446519c1cd6a34",
     "scripts/standardize_job_title.py": "bc0a3f05320f9c26d7ee3e50ffcb713d1d31648bddcdca55535178433db19071",
-    "scripts/batch_screen_resumes.py": "1efa92c610218d3ad27deddf98c4dd4ef042ab514d5de70714dccaca19d50cfd",
+    "scripts/batch_screen_resumes.py": "12e07f6d0bd8a38370ae1ac27b27e52b1bde53abf05708cc740e085a66adf177",
 }
 
 # 已知良好的“多年销售、描述单薄”简历（即真实世界最易踩坑的形态）。
@@ -187,8 +187,8 @@ def check_engine_self_test() -> bool:
         return False
     ev = rec.get("details", {}).get("evidence", {})
     months = ev.get("relevant_months", ev.get("credible_relevant_months", 0))
-    # 新模型：强样例（双段高可信销售 + 稳定 + 学历达标）匹配分应达强推荐门槛（默认 75）。
-    ok = months and months > 0 and rec.get("score_100", 0) >= 75 and rec.get("tier") == "强推荐"
+    # 新模型：强样例（双段高可信销售 + 近期在职稳定 + 学历达标）匹配分应达强推荐门槛（默认 60）。
+    ok = months and months > 0 and rec.get("score_100", 0) >= 60 and rec.get("tier") == "强推荐"
     print(f"  {OK if ok else BAD} 样例相关经验={months} 个月，匹配分={rec.get('score_100')}，推荐等级={rec.get('tier')}")
     if not ok:
         print(f"     {BAD} 引擎异常：已知销售样例被判经验不足/低分/未达强推荐，文件很可能损坏。")
@@ -238,6 +238,109 @@ def check_layout_regression() -> bool:
         print(f"  {OK if ok else BAD} {name}：relevant_months={months}")
         if not ok:
             print(f"     {BAD} 该版式的真实岗位未被识别为销售 → 表头解析回退（旧版/未修复）。")
+    return all_ok
+
+
+# 规则回归（v2.5）：两条「锁定待审核」覆盖，命中即锁定「待审核」（双向：本应强推荐也压下来）。
+# 每条 fixture 断言 tier=="待审核" 且 tier_override 含指定关键词。均用显式信号使其不随日期漂移。
+RULE_OVERRIDE_RESUMES = {
+    "R3 有销售经验+高中学历(本应强推荐)→待审核": (
+        """姓名：规则A测试
+电话：13600130001
+学历：高中  某某中学  2008.09-2011.06
+
+工作经历
+2011.07-2018.06  A贸易公司  销售代表
+负责华东区客户开发与维护，年销售额500万，客户续约率90%，团队排名top3
+2018.07-至今  B科技有限公司  销售经理
+带领8人销售团队，年度业绩达成率120%，月均成交30单，服务大客户
+""",
+        "高中",
+    ),
+    "R4 应届+小语种专业→待审核": (
+        """姓名：规则B测试
+电话：13600130002
+应届毕业生
+
+教育背景
+华东外国语大学  西班牙语专业  2022.09-2026.06
+
+实习经历
+2025.07-2025.09  C公司  销售实习生
+协助客户对接与资料整理
+""",
+        "应届",
+    ),
+}
+
+
+def check_rule_overrides() -> bool:
+    print("—— C3. 规则回归（v2.5：命中即锁定待审核）——")
+    try:
+        from parse_resume import parse_resume_text
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {BAD} 无法导入 parse_resume：{exc}")
+        return False
+    all_ok = True
+    for name, (resume, must_contain) in RULE_OVERRIDE_RESUMES.items():
+        card = parse_resume_text(resume, jd_text="招聘销售，学历不限，1年以上销售经验", job_title="销售")
+        rec = card.get("recommendation", {})
+        tier = rec.get("tier")
+        override = rec.get("tier_override", "")
+        ok = tier == "待审核" and bool(override) and must_contain in override
+        all_ok = all_ok and ok
+        print(f"  {OK if ok else BAD} {name}：tier={tier}  override=「{override}」")
+        if not ok:
+            print(f"     {BAD} 该规则未生效：期望 tier=待审核 且 override 含「{must_contain}」（旧版/未更新）。")
+    return all_ok
+
+
+def check_review_regressions() -> bool:
+    """审查修复回归（B1 相邻销售加分 / B2 语言优势收窄 / B3 应届门控）。"""
+    print("—— C4. 审查修复回归（B1 相邻销售加分 / B2 语言优势收窄 / B3 应届门控）——")
+    try:
+        from datetime import datetime
+        from parse_resume import parse_resume_text
+        from recommendation_engine import has_recent_stable_sales, has_language_advantage
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {BAD} 无法导入：{exc}")
+        return False
+    all_ok = True
+
+    # B1：两段「相邻」在职销售、合并后连续 ≥12 个月 → 应命中近期稳定销售。用相对当前月的动态日期，避免漂移。
+    def _ym(delta: int) -> str:
+        now = datetime.now()
+        idx = now.year * 12 + (now.month - 1) - delta
+        return f"{idx // 12}.{idx % 12 + 1:02d}"
+    cand_b1 = {"basic_info": {"name": "B1"}, "education": [], "experiences": [
+        {"type": "正式工作", "standardized_job_title": "销售", "job_title": "销售",
+         "start_date": _ym(17), "end_date": _ym(9), "credibility_score": 0.5, "description": "销售"},
+        {"type": "正式工作", "standardized_job_title": "销售", "job_title": "销售",
+         "start_date": _ym(8), "end_date": "至今", "credibility_score": 0.5, "description": "销售"},
+    ], "parsing_confidence": 0.8}
+    b1_ok, b1_months = has_recent_stable_sales(cand_b1, "销售")
+    all_ok = all_ok and b1_ok
+    print(f"  {OK if b1_ok else BAD} B1 相邻两段(各8月)连续在职 → recent_stable={b1_ok}（合并月数={b1_months}）")
+
+    # B2：CET-6/六级 不算语言优势；雅思、小语种专业仍算。
+    b2_cet6 = has_language_advantage({"basic_info": {"languages": "英语（CET-6）"}, "education": [{"major": "会计"}]})
+    b2_ielts = has_language_advantage({"basic_info": {"languages": "英语（雅思7.5）"}, "education": [{"major": "会计"}]})
+    b2_minor = has_language_advantage({"basic_info": {"languages": ""}, "education": [{"major": "西班牙语"}]})
+    b2_ok = (not b2_cet6) and b2_ielts and b2_minor
+    all_ok = all_ok and b2_ok
+    print(f"  {OK if b2_ok else BAD} B2 CET6={b2_cet6}(应False) 雅思={b2_ielts}(应True) 小语种={b2_minor}(应True)")
+
+    # B3：资深候选人（有正式工作）+ 正文含「应届」(校招语境) → 不得被误判应届、不得被锁待审核。
+    senior = (
+        "姓名：资深复核\n电话：13600130098\n学历：本科  华东示范大学  日语专业  2010.09-2014.06\n\n"
+        "工作经历\n2014.07-至今  甲公司  销售经理\n负责应届生校园招聘与团队管理，年销售额500万\n"
+    )
+    card = parse_resume_text(senior, jd_text="招聘销售，学历不限", job_title="销售")
+    b3_ok = (card.get("is_fresh_graduate") is False) and (card["recommendation"]["tier_override"] == "")
+    all_ok = all_ok and b3_ok
+    print(f"  {OK if b3_ok else BAD} B3 资深(全职{card['tenure_summary']['full_time_months']}月)+正文含'应届校招' → is_fresh={card.get('is_fresh_graduate')} override={card['recommendation']['tier_override'][:12]!r}")
+    if not all_ok:
+        print(f"     {BAD} 审查修复未全部生效（旧版/未更新）。")
     return all_ok
 
 
@@ -320,6 +423,10 @@ def main() -> int:
     print()
     c2 = check_layout_regression()
     print()
+    c3 = check_rule_overrides()
+    print()
+    c4 = check_review_regressions()
+    print()
 
     if args.resume:
         try:
@@ -329,7 +436,7 @@ def main() -> int:
             return 2
         print()
 
-    verdict_ok = a and b and c and c2
+    verdict_ok = a and b and c and c2 and c3 and c4
     print("—— 结论 ——")
     if verdict_ok:
         print(f"{OK} 版本为最新（{EXPECTED_VERSION}）、文件完整、引擎正常。若仍有简历打分异常，请用 D 段诊断该简历并把输出发回。")

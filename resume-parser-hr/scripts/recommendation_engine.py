@@ -24,6 +24,17 @@ RELEVANT_CRED_FLOOR = 0.3
 # 相关经验达到该月数即视为「长年限本身即证据」，不再因缺量化业绩而判“缺少强证据”。
 SUBSTANTIAL_RELEVANT_MONTHS = 24
 
+# 近期稳定销售（HR 口径）：目前在职或近 6 个月内离职、且该段销售相关经历连续任职 ≥12 个月，
+# 视为「近一年有稳定销售经验」，在匹配分上给固定加分（见 has_recent_stable_sales / calculate_evidence_score）。
+RECENT_STABLE_MIN_MONTHS = 12       # 连续任职月数下限
+RECENT_STABLE_RECENCY_MONTHS = 6    # 距今结束月数上限（在职=0）
+RECENT_STABLE_SALES_BONUS = 12.0    # 命中后在匹配分上加的分
+
+# 语言优势判定（应届生锁定待审核用）：大学专业为小语种，或简历体现较好语言水平（证书/小语种）。
+# 「较好水平」只认区分度高或外语专业特有的证书；CET-6/六级 是本科普遍证书，不算优势（否则近乎所有本科应届被锁）。
+MINOR_LANGUAGES = ["日语", "韩语", "法语", "德语", "西班牙语", "俄语", "阿拉伯语", "葡萄牙语", "意大利语", "泰语", "越南语", "印尼语"]
+LANGUAGE_CERT_RE = re.compile(r"雅思|IELTS|托福|TOEFL|专八|TEM-?8|专四|TEM-?4|BEC|JLPT|N[12](?![-\d])|TOPIK", re.I)
+
 
 def parse_jd(jd_text: str) -> Dict:
     result = {
@@ -145,6 +156,46 @@ def relevant_experience_months(candidate: Dict, job_title: str, cred_floor: floa
     return sum(months_between(s, e) for s, e in merged)
 
 
+def has_recent_stable_sales(candidate: Dict, job_title: str) -> Tuple[bool, int]:
+    """近一年是否有「稳定」的销售经验（HR 加分口径）。
+
+    取销售相关且为「正式工作」、可信度达门槛的经历，按时间区间取并集后：
+    只要某段并集经历「目前在职或近 RECENT_STABLE_RECENCY_MONTHS 个月内结束」
+    且「连续任职 ≥ RECENT_STABLE_MIN_MONTHS 个月」，即视为近期稳定销售，返回 (True, 该段月数)。
+    """
+    try:
+        from .calculate_tenure import months_between, parse_date
+    except ImportError:
+        from calculate_tenure import months_between, parse_date
+
+    today = parse_date("至今")  # 复用现有「至今→当月 1 号」逻辑，避免单独引 datetime
+    intervals = []
+    for exp in related_experiences(candidate, job_title):
+        if exp.get("credibility_score", 0) >= RELEVANT_CRED_FLOOR and exp.get("type") == "正式工作":
+            start = parse_date(exp.get("start_date"))
+            end = parse_date(exp.get("end_date"))
+            if start and end and start <= end:
+                intervals.append((start, end))
+    if not intervals:
+        return False, 0
+    intervals.sort()
+    merged = [intervals[0]]
+    for start, end in intervals[1:]:
+        last_start, last_end = merged[-1]
+        # 重叠(gap=0)或相邻月(gap=1，如上一段 2025.10 结束、本段 2025.11 开始)都并入，
+        # 否则日期取月初会把「连续但跨两段」的销售拆开、漏判近期稳定（见 B1 复核）。
+        if months_between(last_end, start) <= 1:
+            merged[-1] = (last_start, max(last_end, end))
+        else:
+            merged.append((start, end))
+    for start, end in merged:
+        recent = months_between(end, today) <= RECENT_STABLE_RECENCY_MONTHS
+        stable = months_between(start, end) >= RECENT_STABLE_MIN_MONTHS
+        if recent and stable:
+            return True, months_between(start, end)
+    return False, 0
+
+
 def _has_sales_evidence(exp: Dict) -> bool:
     desc = exp.get("description", "") or ""
     return bool(PERFORMANCE_RE.search(desc) or CUSTOMER_RE.search(desc))
@@ -176,6 +227,10 @@ def check_strong_criteria(candidate: Dict, jd: Dict, job_title: str) -> Tuple[bo
     evidence["relevant_months"] = relevant_months
     evidence["credible_relevant_months"] = credible_months
     evidence["high_credible_relevant_count"] = len(high_credible_relevant)
+    # 近期稳定销售（近一年在职/近离职且连续 ≥12 个月）→ 供匹配分加分（需求 1）。
+    recent_stable, recent_stable_months = has_recent_stable_sales(candidate, target)
+    evidence["recent_stable_sales"] = recent_stable
+    evidence["recent_stable_sales_months"] = recent_stable_months
 
     if relevant_months < min_months:
         unmet.append(f"相关经验不足{min_months}个月（当前{relevant_months}个月）")
@@ -286,15 +341,16 @@ P1_PEN = 6.0               # 每个 P1 异常扣分
 P1_PEN_CAP = 18.0
 P2_PEN = 3.0               # 每个 P2 异常扣分
 P2_PEN_CAP = 9.0
-DEFAULT_PASS_THRESHOLD = 75.0   # 强推荐门槛（可 CLI / 环境变量覆盖）
-
-# 推荐等级：匹配分单调分档。待审核 = 门槛-10，谨慎 = 门槛-20，其余不推荐。
-TIER_STEP = 10.0
-TIER_DOTS = {"强推荐": "🟢", "待审核": "🟡", "谨慎": "🟠", "不推荐": "🔴"}
+# —— 推荐等级：3 档固定分带（HR 口径）——
+# 强推荐 60-100 / 待审核 40-60 / 淘汰 <40。门槛可 CLI（--pass-threshold/--review-threshold）
+# 或环境变量（HR_PASS_THRESHOLD/HR_REVIEW_THRESHOLD）覆盖，默认即上述固定值。
+DEFAULT_PASS_THRESHOLD = 60.0     # 强推荐门槛
+DEFAULT_REVIEW_THRESHOLD = 40.0   # 待审核下限（低于此为「淘汰」）
+TIER_DOTS = {"强推荐": "🟢", "待审核": "🟡", "淘汰": "🔴"}
 
 
 def resolve_threshold(cli_value: Optional[float] = None) -> float:
-    """强推荐门槛优先级：CLI 显式值 > 环境变量 HR_PASS_THRESHOLD > 默认 75。"""
+    """强推荐门槛优先级：CLI 显式值 > 环境变量 HR_PASS_THRESHOLD > 默认 60。"""
     if cli_value is not None:
         try:
             return float(cli_value)
@@ -307,6 +363,22 @@ def resolve_threshold(cli_value: Optional[float] = None) -> float:
         except ValueError:
             pass
     return DEFAULT_PASS_THRESHOLD
+
+
+def resolve_review_threshold(cli_value: Optional[float] = None) -> float:
+    """待审核下限（淘汰线）优先级：CLI 显式值 > 环境变量 HR_REVIEW_THRESHOLD > 默认 40。"""
+    if cli_value is not None:
+        try:
+            return float(cli_value)
+        except (TypeError, ValueError):
+            pass
+    env_value = os.environ.get("HR_REVIEW_THRESHOLD")
+    if env_value:
+        try:
+            return float(env_value)
+        except ValueError:
+            pass
+    return DEFAULT_REVIEW_THRESHOLD
 
 
 def calculate_evidence_score(
@@ -324,6 +396,7 @@ def calculate_evidence_score(
       D3 稳定性     = 稳定分×0.6 + Gap 分×0.4；
       D4 置信度     = 解析置信度×0.75 + 相关经历可信占比×0.25。
     软扣分：降权因子、P1/P2 异常（均封顶）。P0 不扣分（由 fit_tier 追加 ⚠️ 徽标）。
+    加分：近一年有稳定销售经验（evidence.recent_stable_sales）额外 +RECENT_STABLE_SALES_BONUS。
     """
     downgrade = downgrade or []
     scoring_anomalies = [
@@ -361,26 +434,51 @@ def calculate_evidence_score(
     downgrade_penalty = min(len(downgrade) * DOWNGRADE_PEN, DOWNGRADE_PEN_CAP)
     anomaly_penalty = min(p1_count * P1_PEN, P1_PEN_CAP) + min(p2_count * P2_PEN, P2_PEN_CAP)
 
-    score = raw - downgrade_penalty - anomaly_penalty
+    # 近期稳定销售加分（需求 1）：命中即 +固定分，最终 clamp[0,100]，100 封顶天然生效。
+    stable_bonus = RECENT_STABLE_SALES_BONUS if evidence.get("recent_stable_sales") else 0.0
+
+    score = raw + stable_bonus - downgrade_penalty - anomaly_penalty
     return round(max(0.0, min(100.0, score)), 1)
 
 
-def fit_tier(score_100: float, threshold: float, p0_items: Optional[List[Dict]] = None) -> Tuple[str, str, str]:
-    """匹配分 → 推荐等级（单调）：强推荐 / 待审核 / 谨慎 / 不推荐。
+def fit_tier(
+    score_100: float,
+    strong_threshold: float,
+    review_threshold: float,
+    p0_items: Optional[List[Dict]] = None,
+) -> Tuple[str, str, str]:
+    """匹配分 → 推荐等级（3 档单调）：强推荐 / 待审核 / 淘汰。
 
-    返回 (等级, 色点, 徽标)。存在 P0 时徽标为 ⚠️（数据红旗），不改变分档——
-    同一匹配分永远对应同一等级，彻底消除「高分低等级」脱钩。
+    强推荐 ≥ strong_threshold（默认 60）；待审核 ≥ review_threshold（默认 40）；否则淘汰。
+    返回 (等级, 色点, 徽标)。存在 P0 时徽标为 ⚠️（数据红旗），不改变分档。
+    注：规则性「锁定待审核」（学历高中+销售、应届+语言优势）在 recommend() 里另行覆盖。
     """
-    if score_100 >= threshold:
+    if score_100 >= strong_threshold:
         tier = "强推荐"
-    elif score_100 >= threshold - TIER_STEP:
+    elif score_100 >= review_threshold:
         tier = "待审核"
-    elif score_100 >= threshold - 2 * TIER_STEP:
-        tier = "谨慎"
     else:
-        tier = "不推荐"
+        tier = "淘汰"
     badge = "⚠️" if p0_items else ""
     return tier, TIER_DOTS[tier], badge
+
+
+def _is_high_school_only(candidate: Dict) -> bool:
+    """候选人最高学历为高中（含中专——DEGREE_ORDER 中二者同为 1 级）。"""
+    return _candidate_degree_level(candidate) == DEGREE_ORDER["高中"]
+
+
+def has_language_advantage(candidate: Dict) -> bool:
+    """是否具备语言优势：大学专业为小语种，或简历体现较好语言水平（证书/小语种）。"""
+    majors = " ".join(edu.get("major") or "" for edu in candidate.get("education", []))
+    if any(lang in majors for lang in MINOR_LANGUAGES):
+        return True
+    langs = candidate.get("basic_info", {}).get("languages") or ""
+    if LANGUAGE_CERT_RE.search(langs):
+        return True
+    if any(lang in langs for lang in MINOR_LANGUAGES):
+        return True
+    return False
 
 
 def recommend(
@@ -388,6 +486,7 @@ def recommend(
     jd_text: Optional[str] = None,
     job_title: Optional[str] = None,
     pass_threshold: Optional[float] = None,
+    review_threshold: Optional[float] = None,
 ) -> Dict:
     jd = parse_jd(jd_text or "")
     target = standardize_job_title(job_title or jd.get("job_title") or "销售")
@@ -402,15 +501,30 @@ def recommend(
     p0 = [item for item in scoring_anomalies if item.get("level") == "P0"]
 
     threshold = resolve_threshold(pass_threshold)
+    review_line = resolve_review_threshold(review_threshold)
     parsing_confidence = candidate.get("parsing_confidence", 0.75)
-    # 匹配分为唯一底层分数：四维平滑加权（经验/学历/稳定/置信度）− 降权/P1/P2 软扣分。
+    # 匹配分为唯一底层分数：四维平滑加权（经验/学历/稳定/置信度）− 降权/P1/P2 软扣分 + 近期稳定销售加分。
     # 不再用「强判据全有或全无」把分数归零；解析置信度已并入 D4，低置信度自然拉低分数。
     score_100 = calculate_evidence_score(
         evidence, candidate.get("stability_scores", {}), anomalies,
         parsing_confidence, downgrade,
     )
-    # 推荐等级由匹配分单调推导；P0 只追加 ⚠️ 徽标（红旗），不改变分档、不再单独降级。
-    tier, tier_dot, tier_badge = fit_tier(score_100, threshold, p0)
+    # 推荐等级由匹配分单调推导（3 档）；P0 只追加 ⚠️ 徽标（红旗），不改变分档、不再单独降级。
+    tier, tier_dot, tier_badge = fit_tier(score_100, threshold, review_line, p0)
+
+    # —— 规则性「锁定待审核」覆盖（HR 口径，命中即锁定，双向）——
+    # 3) 有销售经验但最高学历高中 → 一律待审核；4) 应届生 + 语言优势 → 直接待审核。
+    override_reasons: List[str] = []
+    has_sales_exp = (evidence.get("relevant_months", 0) or 0) > 0
+    if has_sales_exp and _is_high_school_only(candidate):
+        override_reasons.append("有销售经验但最高学历为高中，按规则锁定待审核")
+    if candidate.get("is_fresh_graduate") and has_language_advantage(candidate):
+        override_reasons.append("应届生且具备语言优势（小语种专业/较好语言水平），按规则锁定待审核")
+    if override_reasons:
+        tier = "待审核"                # 命中即锁定，无论原分档是强推荐还是淘汰
+        tier_dot = TIER_DOTS[tier]
+    tier_override = "；".join(override_reasons)
+
     status = tier                     # status 保持干净等级名（供排序/兼容），徽标单列
     tier_display = f"{tier_dot} {tier}" + (f" {tier_badge}" if tier_badge else "")
     p0_remark = "；".join(
@@ -418,6 +532,8 @@ def recommend(
     )
 
     reason_parts = []
+    if tier_override:
+        reason_parts.append(f"【锁定待审核】{tier_override}")
     rel_m = int(evidence.get("relevant_months", 0) or 0)
     if rel_m > 0:
         yrs, mos = divmod(rel_m, 12)
@@ -426,6 +542,8 @@ def recommend(
         reason_parts.append(
             f"相关销售经历约{span}" + ("（但缺少量化业绩，建议人工核验）" if thin else "")
         )
+    if evidence.get("recent_stable_sales"):
+        reason_parts.append("近一年有稳定销售经验（已加分）")
     reason_parts.append("满足强判据" if strong_met else "强判据未满足：" + "、".join(unmet[:4]))
     if weak:
         reason_parts.append("优势：" + "、".join(weak[:4]))
@@ -437,13 +555,15 @@ def recommend(
     confidence = round(max(0.0, min(1.0, parsing_confidence * 0.65 + score * 0.35)), 2)
     return {
         "result": status,            # 兼容旧键：置为 tier（推荐等级），供下游排序/读取
-        "status": status,            # 推荐等级：强推荐 / 待审核 / 谨慎 / 不推荐
+        "status": status,            # 推荐等级：强推荐 / 待审核 / 淘汰
         "tier": tier,                # 同 status，语义更明确
-        "tier_dot": tier_dot,        # 色点 🟢🟡🟠🔴
+        "tier_dot": tier_dot,        # 色点 🟢🟡🔴
         "tier_badge": tier_badge,    # 有 P0 时为 ⚠️，否则空
         "tier_display": tier_display,  # 直接展示用：色点 + 等级(+ ⚠️)
+        "tier_override": tier_override,  # 命中「锁定待审核」规则的原因，未命中为空串
         "score_100": score_100,      # 0-100 统一「匹配分」（唯一底层分数）
         "pass_threshold": threshold,
+        "review_threshold": review_line,
         "p0_items": [
             {"type": item.get("type"), "description": item.get("description")}
             for item in p0
