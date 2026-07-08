@@ -57,6 +57,7 @@ PRESENT_TOKEN_RE = re.compile(r"至今|现在|目前|present|now|在职", re.I)
 PART_TIME_RE = re.compile(r"兼职|寒假|暑假|课余|在校期间|勤工俭学|part[\s-]?time", re.I)
 # 图片简历后缀，OCR 处理（见 extract_text_from_image）。
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}
+PARSING_FAILURE_OVERRIDE = "简历解析失败，按规则锁定待审核"
 
 
 def extract_languages(text: str) -> str:
@@ -481,6 +482,93 @@ def calculate_parsing_confidence(candidate: Dict) -> float:
     return round(completeness * 0.6 + (1 - low_ratio) * 0.4, 2)
 
 
+def _has_usable_education(candidate: Dict) -> bool:
+    return any(edu.get("school") or edu.get("degree") for edu in candidate.get("education", []) or [])
+
+
+def is_parsing_failure(candidate: Dict, text: str) -> bool:
+    """判断是否属于解析失败，而不是正常低匹配候选人。"""
+    if not text.strip():
+        return True
+    basic = candidate.get("basic_info", {}) or {}
+    has_basic = bool(basic.get("name") or basic.get("phone") or basic.get("email"))
+    has_experience = bool(candidate.get("experiences"))
+    return not (has_basic or _has_usable_education(candidate) or has_experience)
+
+
+def parsing_failure_recommendation(
+    reason: str,
+    jd_text: Optional[str] = None,
+    job_title: Optional[str] = None,
+    pass_threshold: Optional[float] = None,
+    review_threshold: Optional[float] = None,
+) -> Dict:
+    """解析失败时的人工复核兜底：直接落到「待审核」。"""
+    threshold = resolve_threshold(pass_threshold)
+    review_line = resolve_review_threshold(review_threshold)
+    target = standardize_job_title(job_title or "未确定")
+    return {
+        "result": "待审核",
+        "status": "待审核",
+        "tier": "待审核",
+        "tier_dot": "🟡",
+        "tier_badge": "",
+        "tier_display": "🟡 待审核",
+        "tier_override": f"{PARSING_FAILURE_OVERRIDE}：{reason}",
+        "score_100": review_line,
+        "pass_threshold": threshold,
+        "review_threshold": review_line,
+        "p0_items": [],
+        "p0_remark": "",
+        "reason": f"【锁定待审核】{PARSING_FAILURE_OVERRIDE}：{reason}",
+        "confidence": 0.0,
+        "score": round(review_line / 100, 2),
+        "target_job_title": target,
+        "details": {
+            "strong_criteria_met": False,
+            "unmet_strong_criteria": ["简历未完成解析，需人工复核"],
+            "weak_criteria": [],
+            "downgrade_factors": ["解析失败"],
+            "evidence": {
+                "relevant_months": 0,
+                "credible_relevant_months": 0,
+                "high_credible_relevant_count": 0,
+                "recent_stable_sales": False,
+            },
+            "p0_count": 0,
+            "p1_count": 0,
+            "p2_count": 0,
+            "compliance_review_count": 0,
+        },
+    }
+
+
+def mark_parsing_failure(
+    candidate: Dict,
+    reason: str,
+    jd_text: Optional[str] = None,
+    job_title: Optional[str] = None,
+    pass_threshold: Optional[float] = None,
+    review_threshold: Optional[float] = None,
+) -> Dict:
+    candidate["parsing_status"] = "failed"
+    candidate["parsing_error"] = reason
+    candidate["parsing_confidence"] = 0
+    candidate["field_completeness"] = 0
+    candidate["low_credibility_ratio"] = 0
+    candidate["anomalies"] = [{
+        "level": "P1",
+        "type": "解析失败",
+        "description": reason,
+        "action": "待审核：解析失败，不自动淘汰",
+    }]
+    candidate["recommendation"] = parsing_failure_recommendation(
+        reason, jd_text=jd_text, job_title=job_title,
+        pass_threshold=pass_threshold, review_threshold=review_threshold,
+    )
+    return candidate
+
+
 # 应届生显式信号词。命中即判应届（另有「无正式工作 + 近期毕业」的启发式兜底）。
 FRESH_GRAD_RE = re.compile(r"应届|应届毕业生|应届生|即将毕业|待毕业|尚未毕业", re.I)
 
@@ -518,6 +606,22 @@ def parse_resume_text(
     review_threshold: Optional[float] = None,
 ) -> Dict:
     text = normalize_text(text)
+    if not text:
+        candidate = {
+            "basic_info": {"name": None, "age": None, "phone": None, "email": None, "birth_date": None, "languages": "未说明"},
+            "education": [],
+            "experiences": [],
+            "source_text_length": 0,
+            "generation_time": datetime.now().isoformat(timespec="seconds"),
+            "version": "2.5",
+            "tenure_summary": calculate_tenure([]),
+            "resume_recency": detect_resume_recency(""),
+            "is_fresh_graduate": False,
+        }
+        return mark_parsing_failure(
+            candidate, "抽取文本为空", jd_text=jd_text, job_title=job_title,
+            pass_threshold=pass_threshold, review_threshold=review_threshold,
+        )
     education = extract_education(text)
     candidate = {
         "basic_info": extract_basic_info(text),
@@ -533,6 +637,12 @@ def parse_resume_text(
     run_all_validations(candidate)
     # 应届生标记需在 tenure_summary 就绪后计算（依赖 full_time_months），供锁定待审核规则读取。
     candidate["is_fresh_graduate"] = detect_fresh_graduate(text, candidate)
+    if is_parsing_failure(candidate, text):
+        return mark_parsing_failure(
+            candidate, "未解析到姓名/联系方式/教育/经历等有效字段",
+            jd_text=jd_text, job_title=job_title,
+            pass_threshold=pass_threshold, review_threshold=review_threshold,
+        )
     if jd_text or job_title:
         candidate["recommendation"] = recommend(
             candidate, jd_text, job_title,

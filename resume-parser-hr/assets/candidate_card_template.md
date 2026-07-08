@@ -13,7 +13,7 @@
 
 ## HR 快筛结论
 > 推荐等级（3 档固定分带）：`🟢 强推荐` 匹配分 ≥ 60；`🟡 待审核` 40–60；`🔴 淘汰` < 40。
-> 另有两条硬规则命中即锁 `🟡 待审核`（有销售经验+高中学历、应届+语言优势），原因见 `tier_override`，请加粗呈现。
+> 另有硬规则命中即锁 `🟡 待审核`（有销售经验+高中学历、应届+语言优势、解析失败兜底），原因见 `tier_override`，请加粗呈现。
 > 存在 P0 数据红旗时等级后带 `⚠️`，只提示不改变分档。
 - 匹配分：<recommendation.score_100> / 100
 - 推荐等级：<recommendation.tier_display>（强推荐门槛 <recommendation.pass_threshold>、待审核下限 <recommendation.review_threshold>）

@@ -43,13 +43,13 @@ EXPECTED_VERSION = "2.5"
 # 发布时生成的完整性清单（相对 skill 根目录）。任何不匹配 = 文件被改动/损坏/旧版。
 # 若日后正常改了代码，用 `python3 scripts/diagnose_resume.py --emit-manifest` 重新生成本字典。
 EXPECTED_SHA256 = {
-    "SKILL.md": "77bd9740098558e189afca95ff81997b0e1c90f003904afbb0cb0445ce00dab6",
-    "scripts/parse_resume.py": "78795c24fdcfe5c3a4d9974cdc6f2b41056a23aaa65cad911187872566da52b1",
+    "SKILL.md": "b1c15f78b056c1bb7ed2b1a0db9a68dd319343eee8ccce6c345134b7b9a6dc34",
+    "scripts/parse_resume.py": "89e722d7f0013b2775bbc47036e9b9670783cc0ce0a8c828f38ccd2235f9aa5a",
     "scripts/recommendation_engine.py": "bdb9d5f0debbc9df7e40430ff217031820b3edeb00324d3ee9e668e9cda9b31f",
     "scripts/validate_anomalies.py": "76298c20a992e19970c3f750ea4c052be840b8a93ff8a9a9210c7a684a8e17fe",
     "scripts/calculate_tenure.py": "6c7c74770b9376de9f045533864b522e854d3e8c2d09e8d7c4446519c1cd6a34",
     "scripts/standardize_job_title.py": "bc0a3f05320f9c26d7ee3e50ffcb713d1d31648bddcdca55535178433db19071",
-    "scripts/batch_screen_resumes.py": "12e07f6d0bd8a38370ae1ac27b27e52b1bde53abf05708cc740e085a66adf177",
+    "scripts/batch_screen_resumes.py": "2e36311cc58b51ab7b5d83c713d2318038a167f681ccdd76cefdd90d7dc65298",
 }
 
 # 已知良好的“多年销售、描述单薄”简历（即真实世界最易踩坑的形态）。
@@ -344,6 +344,33 @@ def check_review_regressions() -> bool:
     return all_ok
 
 
+def check_parsing_failure_fallback() -> bool:
+    print("—— C5. 解析失败兜底（失败不得自动淘汰）——")
+    try:
+        from parse_resume import parse_resume_text
+        from batch_screen_resumes import unparsed_row
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {BAD} 无法导入：{exc}")
+        return False
+
+    card = parse_resume_text("", jd_text="招聘销售，学历不限", job_title="销售")
+    rec = card.get("recommendation", {})
+    card_ok = (
+        card.get("parsing_status") == "failed"
+        and rec.get("tier") == "待审核"
+        and "解析失败" in rec.get("tier_override", "")
+    )
+    print(f"  {OK if card_ok else BAD} 单份空文本 → parsing_status={card.get('parsing_status')} tier={rec.get('tier')} override={rec.get('tier_override')!r}")
+
+    row = unparsed_row(Path("broken.pdf"), "解析失败：测试异常", job_title="销售")
+    row_ok = row.get("tier") == "待审核" and row.get("status") == "待审核" and "锁定待审核" in row.get("comment", "")
+    print(f"  {OK if row_ok else BAD} 批量未解析行 → tier={row.get('tier')} status={row.get('status')} comment={row.get('comment')[:28]!r}")
+
+    if not (card_ok and row_ok):
+        print(f"     {BAD} 解析失败仍可能落入淘汰，需要更新 parse/batch 兜底逻辑。")
+    return bool(card_ok and row_ok)
+
+
 def diagnose_resume(resume_path: str, jd: str, job_title: str) -> None:
     print("—— D. 单份简历诊断 ——")
     from parse_resume import extract_text, parse_resume_text
@@ -427,6 +454,8 @@ def main() -> int:
     print()
     c4 = check_review_regressions()
     print()
+    c5 = check_parsing_failure_fallback()
+    print()
 
     if args.resume:
         try:
@@ -436,7 +465,7 @@ def main() -> int:
             return 2
         print()
 
-    verdict_ok = a and b and c and c2 and c3 and c4
+    verdict_ok = a and b and c and c2 and c3 and c4 and c5
     print("—— 结论 ——")
     if verdict_ok:
         print(f"{OK} 版本为最新（{EXPECTED_VERSION}）、文件完整、引擎正常。若仍有简历打分异常，请用 D 段诊断该简历并把输出发回。")
