@@ -12,14 +12,14 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
-    from .parse_resume import extract_text, parse_resume_text
+    from .parse_resume import extract_text, parse_resume_text, parsing_failure_recommendation
     from .recommendation_engine import (
         DEGREE_ORDER, RELEVANT_CRED_FLOOR, parse_jd, related_experiences,
         relevant_experience_months, resolve_review_threshold, resolve_threshold,
     )
     from .calculate_tenure import months_between, parse_date
 except ImportError:
-    from parse_resume import extract_text, parse_resume_text
+    from parse_resume import extract_text, parse_resume_text, parsing_failure_recommendation
     from recommendation_engine import (
         DEGREE_ORDER, RELEVANT_CRED_FLOOR, parse_jd, related_experiences,
         relevant_experience_months, resolve_review_threshold, resolve_threshold,
@@ -295,24 +295,42 @@ def row_from_candidate(path: Path, candidate: Dict, jd: Dict, job_title: str, we
     return row
 
 
-def unparsed_row(path: Path, reason: str) -> Dict:
+def unparsed_row(
+    path: Path,
+    reason: str,
+    job_title: str = "",
+    pass_threshold: Optional[float] = None,
+    review_threshold: Optional[float] = None,
+) -> Dict:
+    recommendation = parsing_failure_recommendation(
+        reason, job_title=job_title,
+        pass_threshold=pass_threshold, review_threshold=review_threshold,
+    )
     return {
         "source_file": path.name,
         "candidate": path.stem,
-        "evidence_score": 0,
-        "tier": "淘汰",
-        "tier_display": "🔴 未解析（需人工）",
-        "status": "淘汰",
-        "recommendation_score": 0,
+        "evidence_score": recommendation.get("score_100", 0),
+        "tier": "待审核",
+        "tier_display": recommendation.get("tier_display", "🟡 待审核"),
+        "status": "待审核",
+        "recommendation_score": recommendation.get("score", 0),
         "parsing_confidence": 0,
         "education": "未解析",
         "relevant_experience_months": 0,
         "keyword_hits": "-",
-        "mismatch_items": "-",
+        "mismatch_items": "解析失败",
         "p0_remark": "",
         "review_reasons": reason,
-        "comment": "文件未完成解析，需人工处理",
-        "candidate_card": None,
+        "comment": f"**【锁定待审核】{recommendation.get('tier_override', reason)[:40]}**；文件未完成解析，需人工处理",
+        "candidate_card": {
+            "basic_info": {"name": path.stem},
+            "education": [],
+            "experiences": [],
+            "parsing_status": "failed",
+            "parsing_error": reason,
+            "parsing_confidence": 0,
+            "recommendation": recommendation,
+        },
     }
 
 
@@ -437,17 +455,26 @@ def run_batch(resume_dir: Path, jd_text: str, job_title: str, weights: Dict[str,
                 row["review_reasons"] = note if existing in ("", "-") else f"{existing}；{note}"
                 rows.append(row)
             except Exception as exc:  # noqa: BLE001 - OCR 不可用/失败则退回人工。
-                rows.append(unparsed_row(path, f"图片简历需人工处理：{exc}"))
+                rows.append(unparsed_row(
+                    path, f"图片简历需人工处理：{exc}", effective_job_title,
+                    pass_threshold=pass_threshold, review_threshold=review_threshold,
+                ))
             continue
         if suffix not in SUPPORTED_RESUME_SUFFIXES:
-            rows.append(unparsed_row(path, f"暂不支持文件类型：{suffix}"))
+            rows.append(unparsed_row(
+                path, f"暂不支持文件类型：{suffix}", effective_job_title,
+                pass_threshold=pass_threshold, review_threshold=review_threshold,
+            ))
             continue
         try:
             text = extract_text(str(path))
             candidate = parse_resume_text(text, jd_text=jd_text, job_title=effective_job_title, pass_threshold=pass_threshold, review_threshold=review_threshold)
             rows.append(row_from_candidate(path, candidate, jd, effective_job_title, weights))
         except Exception as exc:  # noqa: BLE001 - one bad resume must not stop the batch.
-            rows.append(unparsed_row(path, f"解析失败：{exc}"))
+            rows.append(unparsed_row(
+                path, f"解析失败：{exc}", effective_job_title,
+                pass_threshold=pass_threshold, review_threshold=review_threshold,
+            ))
     return sort_rows(rows)
 
 
