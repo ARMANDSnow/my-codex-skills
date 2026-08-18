@@ -1,0 +1,4 @@
+interface:
+  display_name: "IELTS 双语精读笔记"
+  short_description: "从原文或订阅文章生成 Obsidian 中英伴读笔记"
+  default_prompt: "Use $build-ielts-reading-notes to import an article and create aligned English and Chinese IELTS reading notes in Obsidian."

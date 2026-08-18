@@ -1,0 +1,46 @@
+@charset "UTF-8";
+
+:root {
+  color-scheme: light;
+  --ink: #17202a;
+  --muted: #667085;
+  --accent: #255f9f;
+  --rule: #d6dde5;
+  --definition: #eaf7fc;
+  --case: #fdf0f2;
+}
+
+html { background: #fff; }
+body {
+  margin: 0 auto;
+  max-width: 46em;
+  padding: 1.2em 1.1em 3em;
+  color: var(--ink);
+  background: #fff;
+  font-family: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", serif;
+  line-height: 1.78;
+  text-align: justify;
+}
+p { margin: 0.55em 0; }
+h1, h2, h3 { text-align: left; break-after: avoid; }
+h1 { color: #123f70; font-size: 2em; }
+h2 { color: #8f2430; border-bottom: 1px solid var(--rule); }
+h3 { color: #433b8f; }
+.source-page-anchor { display: block; height: 0; overflow: hidden; }
+.definition { margin: 0.85em 0; padding: 0.55em 0.8em; border-left: 0.3em solid #168ab5; background: var(--definition); }
+.case-study { margin: 1.2em 0; padding: 1em; border-left: 0.35em solid #8f2430; background: var(--case); }
+figure { margin: 1.2em auto; max-width: 28em; text-align: center; break-inside: avoid; }
+img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+figcaption { margin-top: 0.45em; color: var(--muted); font-size: 0.84em; text-align: left; }
+table { width: 100%; margin: 1.2em 0; border-collapse: collapse; font-size: 0.9em; }
+th, td { padding: 0.45em 0.55em; border: 1px solid #aeb9c5; vertical-align: top; text-align: left; }
+th { background: #eef5fa; }
+ol, ul { padding-left: 1.55em; }
+li { margin: 0.28em 0; }
+
+@media (max-width: 34em) {
+  body { padding: 0.8em 0.78em 2em; font-size: 0.98em; }
+  h1 { font-size: 1.7em; }
+  table { font-size: 0.82em; }
+  th, td { padding: 0.35em 0.4em; }
+}

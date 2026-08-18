@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build IELTS Vocabulary Notes"
+  short_description: "Build detailed Obsidian IELTS vocabulary cards."
+  default_prompt: "Use $build-ielts-vocabulary-notes to turn this chapter into a review note."

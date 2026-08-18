@@ -16,8 +16,11 @@ The installer copies these skills into `~/.codex/skills/`:
 
 - `resume-parser-hr`
 - `hr-recruit-sop-qa`
+- `translate-english-textbooks`
+- `build-ielts-reading-notes`
+- `build-ielts-vocabulary-notes`
 
-Existing local copies with the same names are replaced, so `resume-parser-hr` will update to the latest version from this repository.
+Existing local copies with the same names are replaced, so installed skills update to the latest version from this repository.
 
 Restart Codex after installation.
 

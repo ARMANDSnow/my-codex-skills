@@ -1,0 +1,4 @@
+interface:
+  display_name: "Translate English Textbooks"
+  short_description: "Translate English textbooks into Chinese TXT and EPUB"
+  default_prompt: "Use $translate-english-textbooks to translate this English textbook PDF into Simplified Chinese TXT and EPUB."

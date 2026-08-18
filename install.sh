@@ -7,6 +7,9 @@ DEST_ROOT="${CODEX_HOME:-"$HOME/.codex"}/skills"
 SKILLS=(
   "resume-parser-hr"
   "hr-recruit-sop-qa"
+  "translate-english-textbooks"
+  "build-ielts-reading-notes"
+  "build-ielts-vocabulary-notes"
 )
 
 mkdir -p "$DEST_ROOT"
